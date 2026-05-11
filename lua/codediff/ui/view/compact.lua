@@ -44,6 +44,47 @@ function M.compute_visible_lines(changes, side, line_count, context_lines)
   return visible
 end
 
+local function add_review_header_lines(visible, session, side)
+  if not session or session.mode ~= "review" then
+    return
+  end
+
+  local header_key = side == "original" and "original_header_start" or "modified_header_start"
+  local content_key = side == "original" and "original_content_start" or "modified_content_start"
+
+  for _, section in ipairs(session.review_sections or {}) do
+    local header_start = section[header_key]
+    local content_start = section[content_key]
+    if header_start and content_start then
+      for line = header_start, content_start - 1 do
+        visible[line] = true
+      end
+    end
+  end
+end
+
+local function compute_visible_lines_for_session(session, side, line_count, context_lines)
+  local changes = session.stored_diff_result and session.stored_diff_result.changes or {}
+  local visible = M.compute_visible_lines(changes, side, line_count, context_lines)
+  add_review_header_lines(visible, session, side)
+  return visible
+end
+
+local function compact_entries(session)
+  local entries = {}
+  if session.layout == "inline" then
+    table.insert(entries, { win = session.modified_win, buf = session.modified_bufnr, side = "modified" })
+  else
+    table.insert(entries, { win = session.original_win, buf = session.original_bufnr, side = "original" })
+    table.insert(entries, { win = session.modified_win, buf = session.modified_bufnr, side = "modified" })
+  end
+  return entries
+end
+
+local function has_conflict_result(session)
+  return session.result_win and vim.api.nvim_win_is_valid(session.result_win)
+end
+
 --- Enable compact mode for a tabpage
 --- @param tabpage number
 --- @return boolean success
@@ -55,7 +96,7 @@ function M.enable(tabpage)
   if session.compact_mode then
     return true
   end
-  if session.result_win and vim.api.nvim_win_is_valid(session.result_win) then
+  if has_conflict_result(session) then
     vim.notify("Cannot enable compact mode in conflict mode", vim.log.levels.WARN)
     return false
   end
@@ -68,18 +109,9 @@ function M.enable(tabpage)
 
   local context = config.options.diff.compact_context_lines
 
-  -- Determine which windows to fold
-  local entries = {}
-  if session.layout == "inline" then
-    table.insert(entries, { win = session.modified_win, buf = session.modified_bufnr, side = "modified" })
-  else
-    table.insert(entries, { win = session.original_win, buf = session.original_bufnr, side = "original" })
-    table.insert(entries, { win = session.modified_win, buf = session.modified_bufnr, side = "modified" })
-  end
-
   session.compact_saved_fold_state = {}
 
-  for _, entry in ipairs(entries) do
+  for _, entry in ipairs(compact_entries(session)) do
     if entry.win and vim.api.nvim_win_is_valid(entry.win) then
       -- Save current fold state
       session.compact_saved_fold_state[entry.win] = {
@@ -93,7 +125,7 @@ function M.enable(tabpage)
 
       -- Compute visible lines
       local line_count = vim.api.nvim_buf_line_count(entry.buf)
-      visible_lines_by_win[entry.win] = M.compute_visible_lines(changes, entry.side, line_count, context)
+      visible_lines_by_win[entry.win] = compute_visible_lines_for_session(session, entry.side, line_count, context)
 
       -- Apply fold settings
       vim.wo[entry.win].foldmethod = "expr"
@@ -172,18 +204,10 @@ function M.reapply(tabpage)
 
   local context = config.options.diff.compact_context_lines
 
-  local entries = {}
-  if session.layout == "inline" then
-    table.insert(entries, { win = session.modified_win, buf = session.modified_bufnr, side = "modified" })
-  else
-    table.insert(entries, { win = session.original_win, buf = session.original_bufnr, side = "original" })
-    table.insert(entries, { win = session.modified_win, buf = session.modified_bufnr, side = "modified" })
-  end
-
-  for _, entry in ipairs(entries) do
+  for _, entry in ipairs(compact_entries(session)) do
     if entry.win and vim.api.nvim_win_is_valid(entry.win) then
       local line_count = vim.api.nvim_buf_line_count(entry.buf)
-      visible_lines_by_win[entry.win] = M.compute_visible_lines(changes, entry.side, line_count, context)
+      visible_lines_by_win[entry.win] = compute_visible_lines_for_session(session, entry.side, line_count, context)
 
       vim.wo[entry.win].foldmethod = "expr"
       vim.wo[entry.win].foldexpr = "v:lua.require'codediff.ui.view.compact'.foldexpr_eval()"
@@ -209,6 +233,35 @@ function M.refresh(tabpage)
     return
   end
 
+  M.reapply(tabpage)
+end
+
+--- Enable default compact mode for a tabpage if configured.
+--- @param tabpage number
+--- @return boolean enabled true when this call enabled compact mode
+function M.apply_default(tabpage)
+  local session = lifecycle.get_session(tabpage)
+  if not session or not config.options.diff.compact or session.compact_default_applied or session.compact_mode then
+    return false
+  end
+
+  local changes = session.stored_diff_result and session.stored_diff_result.changes
+  if not changes or #changes == 0 or has_conflict_result(session) then
+    return false
+  end
+
+  if M.enable(tabpage) then
+    session.compact_default_applied = true
+    return true
+  end
+
+  return false
+end
+
+--- Apply default compact mode if needed, then refresh active compact folds.
+--- @param tabpage number
+function M.apply_default_and_reapply(tabpage)
+  M.apply_default(tabpage)
   M.reapply(tabpage)
 end
 
