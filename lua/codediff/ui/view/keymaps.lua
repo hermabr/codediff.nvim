@@ -842,23 +842,8 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
     lifecycle.set_tab_keymap(tabpage, "n", keymaps.align_move, align_move, { desc = "Align moved code block" })
   end
 
-  -- Enable compact mode once by default, then preserve per-session toggles.
-  if session and config.options.diff.compact and not session.compact_default_applied and not session.compact_mode then
-    local has_conflict_result = session.result_win and vim.api.nvim_win_is_valid(session.result_win)
-    local changes = session.stored_diff_result and session.stored_diff_result.changes
-    if changes and #changes > 0 and not has_conflict_result then
-      if compact.enable(tabpage) then
-        session.compact_default_applied = true
-      end
-    end
-  end
-
-  -- Re-apply compact mode folds if active.
-  --
-  -- This keeps compact folds current after explorer/history file switches and
-  -- after the default compact pass above. If a user toggles compact mode off,
-  -- compact_default_applied prevents the default from forcing it on again.
-  compact.reapply(tabpage)
+  -- Apply default compact mode once, then keep active compact folds current.
+  compact.apply_default_and_reapply(tabpage)
 end
 
 return M

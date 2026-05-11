@@ -2,6 +2,7 @@
 local M = {}
 
 local config = require("codediff.config")
+local compact = require("codediff.ui.view.compact")
 local core = require("codediff.ui.core")
 local diff_module = require("codediff.core.diff")
 local git = require("codediff.core.git")
@@ -476,6 +477,8 @@ local function render_review(tabpage, original_buf, modified_buf, original_win, 
     vim.api.nvim_set_current_win(modified_win)
     vim.cmd("normal! zz")
   end
+
+  compact.apply_default_and_reapply(tabpage)
 
   if #errors > 0 then
     vim.notify(string.format("CodeDiff review skipped %d file content load(s)", #errors), vim.log.levels.WARN)

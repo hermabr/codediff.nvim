@@ -89,6 +89,23 @@ describe("CodeDiff review view", function()
     vim.fn.chdir(repo.dir)
   end
 
+  local function create_repo_with_distant_change()
+    repo = h.create_temp_git_repo()
+    local original = {}
+    local modified = {}
+    for i = 1, 12 do
+      original[i] = "line " .. i
+      modified[i] = "line " .. i
+    end
+    modified[12] = "changed line 12"
+
+    repo.write_file("long.txt", original)
+    repo.git("add long.txt")
+    repo.git("commit -m initial")
+    repo.write_file("long.txt", modified)
+    vim.fn.chdir(repo.dir)
+  end
+
   it("opens every changed file in one side-by-side review", function()
     create_repo_with_changes()
 
@@ -136,6 +153,36 @@ describe("CodeDiff review view", function()
     end
 
     assert.is_true(has_keyword, "Review buffer should highlight Lua keywords")
+  end)
+
+  it("applies compact mode after review content loads", function()
+    require("codediff").setup({
+      diff = {
+        layout = "side-by-side",
+        jump_to_first_change = false,
+        compact = true,
+        compact_context_lines = 0,
+      },
+    })
+    create_repo_with_distant_change()
+
+    vim.cmd("CodeDiff review")
+    local _, session = wait_for_review()
+    local section = session.review_sections[1]
+    local modified_lines = vim.api.nvim_buf_get_lines(session.modified_bufnr, 0, -1, false)
+    local changed_line = find_line(modified_lines, "changed line 12")
+
+    assert.is_true(session.compact_mode, "Review mode should honor diff.compact")
+    assert.equal("expr", vim.wo[session.modified_win].foldmethod, "Review window should use compact folds")
+    assert.equal(0, vim.api.nvim_win_call(session.modified_win, function()
+      return vim.fn.foldlevel(section.modified_header_start)
+    end), "Review file header should remain visible in compact mode")
+    assert.equal(1, vim.api.nvim_win_call(session.modified_win, function()
+      return vim.fn.foldlevel(section.modified_content_start)
+    end), "Unchanged content away from hunks should be folded in compact mode")
+    assert.equal(0, vim.api.nvim_win_call(session.modified_win, function()
+      return vim.fn.foldlevel(changed_line)
+    end), "Changed content should remain visible in compact mode")
   end)
 
   it("navigates between file sections in review mode", function()
