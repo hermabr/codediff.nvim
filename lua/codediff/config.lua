@@ -44,6 +44,7 @@ M.defaults = {
     jump_to_first_change = true, -- Auto-scroll to first change when opening a diff: true = jump to first hunk, false = stay at same line
     highlight_priority = 100, -- Priority for line-level diff highlights (increase to override LSP highlights)
     compute_moves = false, -- Detect moved code blocks (opt-in, may increase diff computation time)
+    compact = false, -- Open diffs in compact mode by default
     compact_context_lines = 3, -- Number of context lines around hunks in compact mode
   },
 
