@@ -4,6 +4,63 @@ local M = {}
 local lifecycle = require("codediff.ui.lifecycle")
 local config = require("codediff.config")
 
+local function navigate_review_file(session, direction)
+  local sections = session.review_sections or {}
+  if #sections == 0 then
+    return false
+  end
+
+  local current_buf = vim.api.nvim_get_current_buf()
+  local is_original = current_buf == session.original_bufnr
+  local current_line = vim.api.nvim_win_get_cursor(0)[1]
+  local start_key = is_original and "original_header_start" or "modified_header_start"
+
+  if direction > 0 then
+    for i, section in ipairs(sections) do
+      local target_line = section[start_key]
+      if target_line > current_line then
+        pcall(vim.api.nvim_win_set_cursor, 0, { target_line, 0 })
+        vim.cmd("normal! zz")
+        vim.api.nvim_echo({ { string.format("File %d of %d: %s", i, #sections, section.path), "None" } }, false, {})
+        return true
+      end
+    end
+
+    if config.options.diff.cycle_next_file then
+      local section = sections[1]
+      pcall(vim.api.nvim_win_set_cursor, 0, { section[start_key], 0 })
+      vim.cmd("normal! zz")
+      vim.api.nvim_echo({ { string.format("File 1 of %d: %s", #sections, section.path), "None" } }, false, {})
+      return true
+    end
+
+    vim.api.nvim_echo({ { string.format("Last file (%d of %d)", #sections, #sections), "WarningMsg" } }, false, {})
+    return false
+  end
+
+  for i = #sections, 1, -1 do
+    local section = sections[i]
+    local target_line = section[start_key]
+    if target_line < current_line then
+      pcall(vim.api.nvim_win_set_cursor, 0, { target_line, 0 })
+      vim.cmd("normal! zz")
+      vim.api.nvim_echo({ { string.format("File %d of %d: %s", i, #sections, section.path), "None" } }, false, {})
+      return true
+    end
+  end
+
+  if config.options.diff.cycle_next_file then
+    local section = sections[#sections]
+    pcall(vim.api.nvim_win_set_cursor, 0, { section[start_key], 0 })
+    vim.cmd("normal! zz")
+    vim.api.nvim_echo({ { string.format("File %d of %d: %s", #sections, #sections, section.path), "None" } }, false, {})
+    return true
+  end
+
+  vim.api.nvim_echo({ { string.format("First file (1 of %d)", #sections), "WarningMsg" } }, false, {})
+  return false
+end
+
 -- Navigate to next hunk in the current diff view
 -- Returns true if navigation succeeded, false otherwise
 function M.next_hunk()
@@ -149,6 +206,10 @@ function M.next_file()
   local session = lifecycle.get_session(tabpage)
   local panel_obj = lifecycle.get_explorer(tabpage)
 
+  if session and session.mode == "review" then
+    return navigate_review_file(session, 1)
+  end
+
   if not panel_obj then
     return false
   end
@@ -177,6 +238,10 @@ function M.prev_file()
   local tabpage = vim.api.nvim_get_current_tabpage()
   local session = lifecycle.get_session(tabpage)
   local panel_obj = lifecycle.get_explorer(tabpage)
+
+  if session and session.mode == "review" then
+    return navigate_review_file(session, -1)
+  end
 
   if not panel_obj then
     return false

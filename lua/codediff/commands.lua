@@ -2,7 +2,7 @@
 local M = {}
 
 -- Subcommands available for :CodeDiff
-M.SUBCOMMANDS = { "merge", "file", "dir", "history", "install" }
+M.SUBCOMMANDS = { "merge", "file", "dir", "history", "review", "install" }
 
 local git = require("codediff.core.git")
 local lifecycle = require("codediff.ui.lifecycle")
@@ -446,6 +446,116 @@ local function handle_explorer(revision, revision2, global_opts)
   end
 end
 
+local function handle_review(revision, revision2, _global_opts)
+  -- Try buffer path first (consistent with explorer), fallback to cwd
+  local current_buf = vim.api.nvim_get_current_buf()
+  local current_file = vim.api.nvim_buf_get_name(current_buf)
+  local cwd = vim.fn.getcwd()
+
+  local function open_review(git_root)
+    local function process_status(err_status, status_result, original_rev, modified_rev)
+      vim.schedule(function()
+        if err_status then
+          vim.notify(err_status, vim.log.levels.ERROR)
+          return
+        end
+
+        local has_conflicts = status_result.conflicts and #status_result.conflicts > 0
+        if #status_result.unstaged == 0 and #status_result.staged == 0 and not has_conflicts then
+          vim.notify("No changes to review", vim.log.levels.INFO)
+          return
+        end
+
+        ---@type SessionConfig
+        local session_config = {
+          mode = "review",
+          git_root = git_root,
+          original_path = "",
+          modified_path = "",
+          original_revision = original_rev,
+          modified_revision = modified_rev,
+          layout = "side-by-side",
+          review_data = {
+            status_result = status_result,
+          },
+        }
+
+        view.create(session_config, "")
+      end)
+    end
+
+    if revision and revision2 then
+      git.resolve_revision(revision, git_root, function(err_resolve, commit_hash)
+        if err_resolve then
+          vim.schedule(function()
+            vim.notify(err_resolve, vim.log.levels.ERROR)
+          end)
+          return
+        end
+
+        git.resolve_revision(revision2, git_root, function(err_resolve2, commit_hash2)
+          if err_resolve2 then
+            vim.schedule(function()
+              vim.notify(err_resolve2, vim.log.levels.ERROR)
+            end)
+            return
+          end
+
+          git.get_diff_revisions(commit_hash, commit_hash2, git_root, function(err_status, status_result)
+            process_status(err_status, status_result, commit_hash, commit_hash2)
+          end)
+        end)
+      end)
+    elseif revision then
+      git.resolve_revision(revision, git_root, function(err_resolve, commit_hash)
+        if err_resolve then
+          vim.schedule(function()
+            vim.notify(err_resolve, vim.log.levels.ERROR)
+          end)
+          return
+        end
+
+        git.get_diff_revision(commit_hash, git_root, function(err_status, status_result)
+          process_status(err_status, status_result, commit_hash, "WORKING")
+        end)
+      end)
+    else
+      git.get_status(git_root, function(err_status, status_result)
+        process_status(err_status, status_result, nil, nil)
+      end)
+    end
+  end
+
+  if current_file ~= "" then
+    git.get_git_root(current_file, function(err_file, git_root_file)
+      if not err_file then
+        open_review(git_root_file)
+        return
+      end
+
+      git.get_git_root(cwd, function(err_cwd, git_root_cwd)
+        if not err_cwd then
+          open_review(git_root_cwd)
+          return
+        end
+        vim.schedule(function()
+          vim.notify("Not in a git repository", vim.log.levels.ERROR)
+        end)
+      end)
+    end)
+  else
+    git.get_git_root(cwd, function(err_cwd, git_root)
+      if err_cwd then
+        vim.schedule(function()
+          vim.notify(err_cwd, vim.log.levels.ERROR)
+        end)
+        return
+      end
+      open_review(git_root)
+    end)
+  end
+end
+
 -- Wrapper for merge-base explorer mode: computes merge-base first, then opens explorer
 local function handle_explorer_merge_base(base_rev, target_rev, global_opts)
   local current_buf = vim.api.nvim_get_current_buf()
@@ -478,6 +588,42 @@ local function handle_explorer_merge_base(base_rev, target_rev, global_opts)
           handle_explorer(merge_base_hash, target_rev, global_opts)
         else
           handle_explorer(merge_base_hash, nil, global_opts)
+        end
+      end)
+    end)
+  end)
+end
+
+-- Wrapper for merge-base review mode: computes merge-base first, then opens review
+local function handle_review_merge_base(base_rev, target_rev, global_opts)
+  local current_buf = vim.api.nvim_get_current_buf()
+  local current_file = vim.api.nvim_buf_get_name(current_buf)
+  local cwd = vim.fn.getcwd()
+  local buftype = vim.api.nvim_get_option_value("buftype", { buf = current_buf })
+  local path_for_root = buftype == "" and current_file ~= "" and current_file or cwd
+
+  git.get_git_root(path_for_root, function(err_root, git_root)
+    if err_root then
+      vim.schedule(function()
+        vim.notify(err_root, vim.log.levels.ERROR)
+      end)
+      return
+    end
+
+    local actual_target = target_rev or "HEAD"
+    git.get_merge_base(base_rev, actual_target, git_root, function(err_mb, merge_base_hash)
+      if err_mb then
+        vim.schedule(function()
+          vim.notify(err_mb, vim.log.levels.ERROR)
+        end)
+        return
+      end
+
+      vim.schedule(function()
+        if target_rev then
+          handle_review(merge_base_hash, target_rev, global_opts)
+        else
+          handle_review(merge_base_hash, nil, global_opts)
         end
       end)
     end)
@@ -691,6 +837,22 @@ function M.vscode_diff(opts)
       return
     end
     handle_dir_diff(args[2], args[3], global_opts)
+  elseif subcommand == "review" then
+    -- :CodeDiff review [revision] [revision2]
+    if #args == 1 then
+      handle_review(nil, nil, global_opts)
+    elseif #args == 2 then
+      local base, target = parse_triple_dot(args[2])
+      if base then
+        handle_review_merge_base(base, target, global_opts)
+      else
+        handle_review(args[2], nil, global_opts)
+      end
+    elseif #args == 3 then
+      handle_review(args[2], args[3], global_opts)
+    else
+      vim.notify("Usage: :CodeDiff review [revision] [revision2]", vim.log.levels.ERROR)
+    end
   elseif subcommand == "history" then
     -- :CodeDiff history [range] [file] [--reverse|-r]
     -- :'<,'>CodeDiff history                  - line-range history for selection

@@ -16,6 +16,7 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
   -- Check mode context
   local session = lifecycle.get_session(tabpage)
   local is_history_mode = session and session.mode == "history"
+  local is_review_mode = session and session.mode == "review"
   local is_inline = session and session.layout == "inline"
 
   -- Helper: Quit diff view
@@ -575,18 +576,18 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
   end
 
   -- Diff get/put (do, dp) - layout-aware semantics
-  if keymaps.diff_get then
+  if keymaps.diff_get and not is_review_mode then
     local desc = is_inline and "Revert hunk to original" or "Get change from other buffer"
     lifecycle.set_tab_keymap(tabpage, "n", keymaps.diff_get, diff_get, { desc = desc })
   end
-  if keymaps.diff_put then
+  if keymaps.diff_put and not is_review_mode then
     local desc = is_inline and "Accept change (no-op in inline)" or "Put change to other buffer"
     lifecycle.set_tab_keymap(tabpage, "n", keymaps.diff_put, diff_put, { desc = desc })
   end
-  if keymaps.open_in_prev_tab then
+  if keymaps.open_in_prev_tab and not is_review_mode then
     lifecycle.set_tab_keymap(tabpage, "n", keymaps.open_in_prev_tab, open_in_prev_tab, { desc = "Open buffer in previous tab" })
   end
-  if keymaps.toggle_layout then
+  if keymaps.toggle_layout and not is_review_mode then
     lifecycle.set_tab_keymap(tabpage, "n", keymaps.toggle_layout, function()
       require("codediff.ui.view").toggle_layout(tabpage)
     end, { desc = "Toggle diff layout" })
@@ -629,7 +630,7 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
   end
 
   -- File navigation (]f, [f) - works in both explorer and history mode
-  if is_explorer_mode or is_history_mode then
+  if is_explorer_mode or is_history_mode or is_review_mode then
     if keymaps.next_file then
       lifecycle.set_tab_keymap(tabpage, "n", keymaps.next_file, navigation.next_file, { desc = "Next file" })
     end
@@ -649,13 +650,13 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
     table.insert(diff_bufs, modified_bufnr)
   end
   for _, bufnr in ipairs(diff_bufs) do
-    if keymaps.stage_hunk then
+    if keymaps.stage_hunk and not is_review_mode then
       vim.keymap.set("n", keymaps.stage_hunk, stage_hunk, vim.tbl_extend("force", hunk_opts, { buffer = bufnr, desc = "Stage hunk under cursor" }))
     end
-    if keymaps.unstage_hunk then
+    if keymaps.unstage_hunk and not is_review_mode then
       vim.keymap.set("n", keymaps.unstage_hunk, unstage_hunk, vim.tbl_extend("force", hunk_opts, { buffer = bufnr, desc = "Unstage hunk under cursor" }))
     end
-    if keymaps.discard_hunk then
+    if keymaps.discard_hunk and not is_review_mode then
       vim.keymap.set("n", keymaps.discard_hunk, discard_hunk, vim.tbl_extend("force", hunk_opts, { buffer = bufnr, desc = "Discard hunk under cursor" }))
     end
 

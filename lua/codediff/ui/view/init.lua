@@ -23,7 +23,7 @@ local function get_layout(session_config, tabpage)
 end
 
 ---@class SessionConfig
----@field mode "standalone"|"explorer"|"history"
+---@field mode "standalone"|"explorer"|"history"|"review"
 ---@field git_root string?
 ---@field original_path string
 ---@field modified_path string
@@ -33,6 +33,7 @@ end
 ---@field layout "side-by-side"|"inline"? Optional per-invocation layout override
 ---@field explorer_data table? For explorer mode: { status_result }
 ---@field history_data table? For history mode: { commits, range, file_path, line_range }
+---@field review_data table? For review mode: { status_result }
 ---@field line_range table? For history line-range mode: { start_line, end_line }
 
 ---@param session_config SessionConfig Session configuration
@@ -44,6 +45,10 @@ function M.create(session_config, filetype, on_ready)
   if not lifecycle_initialized then
     lifecycle.setup()
     lifecycle_initialized = true
+  end
+
+  if session_config and session_config.mode == "review" then
+    return require("codediff.ui.view.review").create(session_config, filetype, on_ready)
   end
 
   if get_layout(session_config) == "inline" then
