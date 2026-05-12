@@ -488,19 +488,68 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
     end)
   end
 
-  local function set_current_selection(file_data)
+  local function reveal_file(file_data)
+    if not file_data or not explorer.winid or not vim.api.nvim_win_is_valid(explorer.winid) then
+      return
+    end
+
+    local line_count = vim.api.nvim_buf_line_count(explorer.bufnr)
+    for line = 1, line_count do
+      local node = explorer.tree:get_node(line)
+      if node and node.data and node.data.path == file_data.path and node.data.group == file_data.group then
+        local current_win = vim.api.nvim_get_current_win()
+        vim.api.nvim_win_set_cursor(explorer.winid, { line, 0 })
+        if current_win and vim.api.nvim_win_is_valid(current_win) then
+          vim.api.nvim_set_current_win(current_win)
+        end
+        return
+      end
+    end
+  end
+
+  local function set_current_selection(file_data, select_opts)
+    select_opts = select_opts or {}
+    if not file_data then
+      return
+    end
+
+    local same_selection = explorer.current_file_path == file_data.path
+      and explorer.current_file_group == file_data.group
+      and selected_path == file_data.path
+      and selected_group == file_data.group
     explorer.current_file_path = file_data.path
     explorer.current_file_group = file_data.group
     explorer.current_selection = vim.deepcopy(file_data)
     selected_path = file_data.path
     selected_group = file_data.group
-    tree:render()
+    if not same_selection then
+      tree:render()
+    end
+    if select_opts.reveal then
+      reveal_file(file_data)
+    end
   end
 
+  explorer.set_current_selection = set_current_selection
+  explorer.reveal_file = reveal_file
+
   -- Wrap on_file_select to track current file and group
-  explorer.on_file_select = function(file_data, opts)
-    set_current_selection(file_data)
-    on_file_select(file_data, opts)
+  explorer.on_file_select = function(file_data, select_opts)
+    select_opts = select_opts or {}
+    set_current_selection(file_data, select_opts)
+
+    local lifecycle = require("codediff.ui.lifecycle")
+    local session = lifecycle.get_session(tabpage)
+    if session and session.mode == "review" then
+      if not select_opts.no_jump then
+        require("codediff.ui.view.navigation").jump_to_review_file(tabpage, file_data, {
+          update_explorer = false,
+        })
+      end
+      return
+    end
+
+    on_file_select(file_data, select_opts)
   end
 
   -- Clear selection highlight (used when showing welcome page)
@@ -561,7 +610,7 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
     }
 
     if opts.select_initial == false then
-      set_current_selection(initial_selection)
+      set_current_selection(initial_selection, { reveal = true })
     else
       vim.schedule(function()
         -- Scroll explorer to the selected file using tree:get_node(line) lookup

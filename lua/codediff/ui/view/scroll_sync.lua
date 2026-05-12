@@ -3,6 +3,8 @@
 -- maps by rendered screen rows.
 local M = {}
 
+local review_sections = require("codediff.ui.view.review_sections")
+
 local states = {}
 
 local function valid_win(win)
@@ -126,20 +128,11 @@ local function session_for_pair(source_win, target_win)
 end
 
 local function side_for_win(session, win)
-  if session.original_win == win then
-    return "original"
-  end
-  if session.modified_win == win then
-    return "modified"
-  end
-  return nil
+  return review_sections.side_for_win(session, win)
 end
 
 local function section_content_line(section, side)
-  if side == "original" then
-    return section.original_content_start
-  end
-  return section.modified_content_start
+  return review_sections.content_line(section, side)
 end
 
 local function screen_row(win, line)
@@ -155,28 +148,11 @@ local function screen_row(win, line)
 end
 
 local function window_topline(win)
-  return vim.api.nvim_win_call(win, function()
-    return vim.fn.winsaveview().topline or 1
-  end)
+  return review_sections.window_topline(win)
 end
 
 local function section_at_or_before(sections, side, line)
-  local low = 1
-  local high = #sections
-  local result = 1
-
-  while low <= high do
-    local mid = math.floor((low + high) / 2)
-    local section_line = section_content_line(sections[mid], side) or 1
-    if section_line <= line then
-      result = mid
-      low = mid + 1
-    else
-      high = mid - 1
-    end
-  end
-
-  return result
+  return review_sections.section_index_at_or_before(sections, side, line) or 1
 end
 
 local function first_visible_section(session, win, side)
