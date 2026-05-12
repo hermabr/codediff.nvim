@@ -592,6 +592,11 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
       require("codediff.ui.view").toggle_layout(tabpage)
     end, { desc = "Toggle diff layout" })
   end
+  if keymaps.toggle_review and (is_explorer_mode or is_review_mode) then
+    lifecycle.set_tab_keymap(tabpage, "n", keymaps.toggle_review, function()
+      require("codediff.ui.view").toggle_review(tabpage)
+    end, { desc = "Toggle explorer/review mode" })
+  end
   if keymaps.toggle_compact then
     lifecycle.set_tab_keymap(tabpage, "n", keymaps.toggle_compact, function()
       compact.toggle(tabpage)

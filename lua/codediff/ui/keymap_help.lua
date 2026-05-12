@@ -36,7 +36,7 @@ local function section(title, entries)
 end
 
 -- Build sections based on the current session mode
-local function build_sections(keymaps, is_explorer, is_history, is_conflict)
+local function build_sections(keymaps, is_explorer, is_history, is_review, is_conflict)
   local sections = {}
   local km = keymaps.view
 
@@ -49,7 +49,7 @@ local function build_sections(keymaps, is_explorer, is_history, is_conflict)
     { km.diff_put, "Put change to other buffer" },
     { km.open_in_prev_tab, "Open buffer in previous tab" },
   }
-  if is_explorer or is_history then
+  if is_explorer or is_history or is_review then
     table.insert(view_items, { km.next_file, "Next file" })
     table.insert(view_items, { km.prev_file, "Previous file" })
   end
@@ -60,6 +60,9 @@ local function build_sections(keymaps, is_explorer, is_history, is_conflict)
     table.insert(view_items, { km.stage_hunk, "Stage hunk under cursor" })
     table.insert(view_items, { km.unstage_hunk, "Unstage hunk under cursor" })
     table.insert(view_items, { km.discard_hunk, "Discard hunk under cursor" })
+  end
+  if is_explorer or is_review then
+    table.insert(view_items, { km.toggle_review, "Toggle explorer/review mode" })
   end
   table.insert(view_items, { km.toggle_compact, "Toggle compact mode (fold unchanged)" })
   table.insert(view_items, { km.hunk_textobject, "Hunk textobject (visual/operator)" })
@@ -206,9 +209,10 @@ function M.toggle(tabpage)
   local keymaps = config.options.keymaps
   local is_explorer = session and session.mode == "explorer"
   local is_history = session and session.mode == "history"
+  local is_review = session and session.mode == "review"
   local is_conflict = session and session.result_bufnr ~= nil
 
-  local sections = build_sections(keymaps, is_explorer, is_history, is_conflict)
+  local sections = build_sections(keymaps, is_explorer, is_history, is_review, is_conflict)
   local win_width = compute_width(sections)
   local lines, hls = render(sections, win_width)
 

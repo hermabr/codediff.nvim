@@ -14,6 +14,11 @@ return {
 
   run = function(ctx, e2e)
     e2e.exec("CodeDiff")
+    vim.wait(5000, function()
+      local session = require("codediff.ui.lifecycle").get_session(vim.api.nvim_get_current_tabpage())
+      return session and session.mode == "review" and session.review_sections
+    end, 100)
+    require("codediff.ui.view").toggle_review()
     e2e.wait_for_explorer(5000)
     e2e.wait_for_diff_ready(5000)
 

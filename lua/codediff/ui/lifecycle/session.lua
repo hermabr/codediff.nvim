@@ -11,7 +11,7 @@ local welcome_window = require("codediff.ui.view.welcome_window")
 -- Structure: {
 --   tabpage_id = {
 --     original_bufnr, modified_bufnr, original_win, modified_win,
---     mode = "standalone" | "explorer",
+--     mode = "standalone" | "explorer" | "history" | "review",
 --     git_root = string?,
 --     original_path = string,
 --     modified_path = string,
@@ -102,7 +102,7 @@ function M.create_session(
       modified = state.get_file_mtime(modified_bufnr),
     },
 
-    -- Explorer reference (only for explorer mode)
+    -- Explorer reference (for explorer/review mode)
     explorer = nil,
 
     -- Conflict mode result buffer (3-way merge)

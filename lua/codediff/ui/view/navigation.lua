@@ -198,7 +198,7 @@ function M.prev_hunk()
   end
 end
 
--- Navigate to next file in explorer/history mode
+-- Navigate to next file in explorer/history/review mode
 -- In single-file history mode, navigates to next commit instead
 -- Returns true if navigation succeeded, false otherwise
 function M.next_file()
@@ -231,7 +231,7 @@ function M.next_file()
   return true
 end
 
--- Navigate to previous file in explorer/history mode
+-- Navigate to previous file in explorer/history/review mode
 -- In single-file history mode, navigates to previous commit instead
 -- Returns true if navigation succeeded, false otherwise
 function M.prev_file()

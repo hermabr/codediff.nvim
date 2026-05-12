@@ -1,6 +1,6 @@
 -- Plugin entry point - auto-loaded by Neovim
 -- Only loads lightweight modules at startup; heavy modules (UI, diff engine,
--- explorer, history) are deferred until first :CodeDiff invocation.
+-- explorer, review, history) are deferred until first :CodeDiff invocation.
 if vim.g.loaded_codediff then
   return
 end
@@ -119,13 +119,13 @@ local function complete_codediff(arg_lead, cmd_line, _)
       if result then return result end
     end
 
-    -- Layout flags are accepted globally; review mode keeps side-by-side layout.
+    -- Layout flags are accepted globally.
     local result = complete_flags({ "--inline", "--side-by-side" }, arg_lead)
     if result then return result end
   end
 
   -- For revision arguments, suggest git refs filtered by arg_lead
-  if (#args == 2 or (first_arg == "review" and #args <= 4)) and arg_lead ~= "" then
+  if #args == 2 and arg_lead ~= "" then
     local cwd = vim.fn.getcwd()
     local git_root = git.get_git_root_sync(cwd)
     local rev_candidates = get_cached_rev_candidates(git_root)
@@ -171,5 +171,5 @@ end, {
   bang = true,
   range = true,
   complete = complete_codediff,
-  desc = "VSCode-style diff view: :CodeDiff [<revision>] | review [<revision>] | merge <file> | file <revision> | install",
+  desc = "VSCode-style diff review: :CodeDiff [<revision>] | merge <file> | file <revision> | history | install",
 })

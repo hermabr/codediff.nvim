@@ -121,7 +121,7 @@ function M.is_suspended(tabpage)
   return sess and sess.suspended or false
 end
 
---- Get explorer reference (for explorer mode)
+--- Get explorer reference (for explorer/review mode)
 function M.get_explorer(tabpage)
   local active_diffs = get_active_diffs()
   local sess = active_diffs[tabpage]
@@ -211,6 +211,18 @@ function M.update_layout(tabpage, layout)
   end
 
   sess.layout = layout
+  return true
+end
+
+--- Update session mode
+function M.update_mode(tabpage, mode)
+  local active_diffs = get_active_diffs()
+  local sess = active_diffs[tabpage]
+  if not sess then
+    return false
+  end
+
+  sess.mode = mode
   return true
 end
 
@@ -311,7 +323,7 @@ function M.update_revisions(tabpage, original_revision, modified_revision)
   return true
 end
 
---- Set explorer reference (for explorer mode)
+--- Set explorer reference (for explorer/review mode)
 function M.set_explorer(tabpage, explorer)
   local active_diffs = get_active_diffs()
   local sess = active_diffs[tabpage]
