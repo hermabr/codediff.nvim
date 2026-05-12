@@ -192,6 +192,18 @@ describe("CodeDiff review view", function()
     assert.is_not_nil(find_line(modified_lines, "new file"), "Untracked content should be present in the review buffer")
   end)
 
+  it("keeps the original review buffer read-only", function()
+    create_repo_with_single_change()
+
+    vim.cmd("CodeDiff review")
+    local _, session = wait_for_review()
+
+    assert.is_false(vim.bo[session.original_bufnr].modifiable, "Original review buffer should not be editable")
+    assert.is_true(vim.bo[session.original_bufnr].readonly, "Original review buffer should be readonly")
+    assert.is_true(vim.bo[session.modified_bufnr].modifiable, "Modified review buffer should remain editable")
+    assert.is_false(vim.bo[session.modified_bufnr].readonly, "Modified review buffer should remain writable")
+  end)
+
   it("installs the quit keymap immediately", function()
     create_repo_with_single_change()
     local initial_tab_count = #vim.api.nvim_list_tabpages()
