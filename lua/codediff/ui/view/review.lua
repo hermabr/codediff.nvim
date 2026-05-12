@@ -15,7 +15,8 @@ local welcome_window = require("codediff.ui.view.welcome_window")
 local HEADER_WIDTH = 80
 local ns_review = vim.api.nvim_create_namespace("codediff-review")
 local ns_review_syntax = vim.api.nvim_create_namespace("codediff-review-syntax")
-local REVIEW_SYNTAX_PRIORITY = ((vim.hl and vim.hl.priorities and vim.hl.priorities.treesitter) or 100) + 1
+local TREESITTER_PRIORITY = (vim.hl and vim.hl.priorities and vim.hl.priorities.treesitter) or 100
+local REVIEW_SYNTAX_PRIORITY = TREESITTER_PRIORITY + 1
 
 local function append_lines(target, lines)
   for _, line in ipairs(lines or {}) do
@@ -335,10 +336,15 @@ local function apply_section_syntax(bufnr, start_line, lines, language)
           local end_col = math.min(range.end_col or start_col, #line_text)
 
           if end_col > start_col then
+            local priority = REVIEW_SYNTAX_PRIORITY
+            if range.priority then
+              priority = REVIEW_SYNTAX_PRIORITY + range.priority - TREESITTER_PRIORITY
+            end
             pcall(vim.api.nvim_buf_set_extmark, bufnr, ns_review_syntax, target_line, start_col, {
               end_col = end_col,
               hl_group = range.hl_group,
-              priority = REVIEW_SYNTAX_PRIORITY,
+              priority = priority,
+              _subpriority = range.order or 0,
               strict = false,
             })
           end
