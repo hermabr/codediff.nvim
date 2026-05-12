@@ -626,7 +626,7 @@ The plugin defines highlight groups matching VSCode's diff colors:
 - `CodeDiffLineDelete` - Light red background for deleted lines
 - `CodeDiffCharInsert` - Deep/dark green for inserted characters
 - `CodeDiffCharDelete` - Deep/dark red for deleted characters
-- `CodeDiffFiller` - Gray foreground for filler line slashes (`╱╱╱`)
+- `CodeDiffFiller` - Subtle background for filler lines where the opposite side has content
 - `CodeDiffLineMove` - Background for moved code lines (derived from DiffChange)
 - `CodeDiffMoveTo` - Sign column and annotation color for move indicators
 
