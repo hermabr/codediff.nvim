@@ -66,6 +66,23 @@ describe("FFI Integration", function()
     assert.equal(0, #result.changes, "Should have no changes for identical empty inputs")
   end)
 
+  it("Treats one empty side as a full-file change", function()
+    local added = diff.compute_diff({}, {"a", "b", "c"})
+    local deleted = diff.compute_diff({"a", "b"}, {})
+
+    assert.equal(1, #added.changes, "Added file should produce one full-file change")
+    assert.equal(1, added.changes[1].original.start_line)
+    assert.equal(1, added.changes[1].original.end_line)
+    assert.equal(1, added.changes[1].modified.start_line)
+    assert.equal(4, added.changes[1].modified.end_line)
+
+    assert.equal(1, #deleted.changes, "Deleted file should produce one full-file change")
+    assert.equal(1, deleted.changes[1].original.start_line)
+    assert.equal(3, deleted.changes[1].original.end_line)
+    assert.equal(1, deleted.changes[1].modified.start_line)
+    assert.equal(1, deleted.changes[1].modified.end_line)
+  end)
+
   -- Test 7: Same content (no changes)
   it("Handles identical content", function()
     local result = diff.compute_diff({"a", "b", "c"}, {"a", "b", "c"})

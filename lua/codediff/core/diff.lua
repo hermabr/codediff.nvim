@@ -227,6 +227,38 @@ local function lines_diff_to_lua(c_diff)
   }
 end
 
+local function full_file_mapping(original_count, modified_count)
+  if original_count == 0 and modified_count > 0 then
+    return {
+      original = {
+        start_line = 1,
+        end_line = 1,
+      },
+      modified = {
+        start_line = 1,
+        end_line = modified_count + 1,
+      },
+      inner_changes = {},
+    }
+  end
+
+  if modified_count == 0 and original_count > 0 then
+    return {
+      original = {
+        start_line = 1,
+        end_line = original_count + 1,
+      },
+      modified = {
+        start_line = 1,
+        end_line = 1,
+      },
+      inner_changes = {},
+    }
+  end
+
+  return nil
+end
+
 -- Main API: Compute diff between two sets of lines
 -- Returns Lua table representation of LinesDiff
 function M.compute_diff(original_lines, modified_lines, options)
@@ -254,6 +286,13 @@ function M.compute_diff(original_lines, modified_lines, options)
 
   -- Convert to Lua table
   local lua_diff = lines_diff_to_lua(c_diff)
+
+  if lua_diff and #lua_diff.changes == 0 then
+    local empty_side_mapping = full_file_mapping(orig_count, mod_count)
+    if empty_side_mapping then
+      table.insert(lua_diff.changes, empty_side_mapping)
+    end
+  end
 
   -- Free C memory
   lib.free_lines_diff(c_diff)

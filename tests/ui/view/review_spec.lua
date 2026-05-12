@@ -215,6 +215,17 @@ describe("CodeDiff review view", function()
     vim.fn.chdir(repo.dir)
   end
 
+  local function create_repo_with_staged_added_then_modified()
+    repo = h.create_temp_git_repo()
+    repo.write_file("b_changed.txt", { "before", "old value" })
+    repo.git("add b_changed.txt")
+    repo.git("commit -m initial")
+    repo.write_file("a_added.txt", { "added one", "added two", "added three", "added four" })
+    repo.write_file("b_changed.txt", { "before", "new value" })
+    repo.git("add a_added.txt b_changed.txt")
+    vim.fn.chdir(repo.dir)
+  end
+
   it("opens every changed file in one side-by-side review", function()
     create_repo_with_changes()
 
@@ -349,6 +360,50 @@ describe("CodeDiff review view", function()
     assert.is_true(modified_fillers[3], "Deleted file should add modified-side filler at row 3")
     assert.equal(1, session.review_sections[1].modified_header_start)
     assert.equal(4, session.review_sections[2].modified_header_start)
+  end)
+
+  it("keeps compact added-file boundaries aligned before the following file", function()
+    require("codediff").setup({
+      diff = {
+        layout = "side-by-side",
+        jump_to_first_change = false,
+        compact = true,
+        compact_context_lines = 0,
+      },
+    })
+    create_repo_with_staged_added_then_modified()
+
+    vim.cmd("CodeDiff review")
+    local _, session = wait_for_review()
+    local added = session.review_sections[1]
+    local changed = session.review_sections[2]
+    local has_added_change = false
+
+    for _, change in ipairs(session.stored_diff_result.changes or {}) do
+      if change.section_index == 1 then
+        has_added_change = true
+        break
+      end
+    end
+
+    assert.equal("a_added.txt", added.path)
+    assert.equal("A", added.status)
+    assert.equal("b_changed.txt", changed.path)
+    assert.is_true(has_added_change, "Added file should contribute a diff mapping for compact visibility")
+    assert.equal(added.original_placeholder_end, changed.original_header_start)
+    assert.equal(added.modified_content_end, changed.modified_header_start)
+
+    vim.api.nvim_win_call(session.modified_win, function()
+      for line = added.modified_content_start, added.modified_content_end - 1 do
+        assert.equal(0, vim.fn.foldlevel(line), "Added content should remain visible in compact mode")
+      end
+    end)
+
+    vim.api.nvim_win_call(session.original_win, function()
+      for line = added.original_placeholder_start, added.original_placeholder_end - 1 do
+        assert.equal(0, vim.fn.foldlevel(line), "Added-file placeholder should remain visible in compact mode")
+      end
+    end)
   end)
 
   it("writes edited modified review sections to their backing files", function()
