@@ -186,6 +186,17 @@ describe("CodeDiff review view", function()
     vim.fn.chdir(repo.dir)
   end
 
+  local function create_repo_with_deleted_then_modified()
+    repo = h.create_temp_git_repo()
+    repo.write_file("a_deleted.txt", { "deleted one", "deleted two", "deleted three" })
+    repo.write_file("b_changed.txt", { "before", "old value" })
+    repo.git("add a_deleted.txt b_changed.txt")
+    repo.git("commit -m initial")
+    vim.fn.delete(repo.path("a_deleted.txt"))
+    repo.write_file("b_changed.txt", { "before", "new value" })
+    vim.fn.chdir(repo.dir)
+  end
+
   it("opens every changed file in one side-by-side review", function()
     create_repo_with_changes()
 
@@ -295,6 +306,33 @@ describe("CodeDiff review view", function()
 
     assert.is_true(navigation.prev_file(), "prev_file should jump to the previous review section")
     assert.equal(session.review_sections[1].modified_header_start, vim.api.nvim_win_get_cursor(session.modified_win)[1])
+  end)
+
+  it("keeps virtual boundaries ordered when an empty side is followed by another file", function()
+    create_repo_with_deleted_then_modified()
+
+    vim.cmd("CodeDiff review")
+    local _, session = wait_for_review()
+    local original_headers = virtual_header_lines(session.original_bufnr)
+    local modified_headers = virtual_header_lines(session.modified_bufnr)
+    local original_deleted_header = find_line(original_headers, "--- a_deleted.txt [unstaged:D]")
+    local deleted_header = find_line(modified_headers, "+++ /dev/null [unstaged:D]")
+    local changed_header = find_line(modified_headers, "+++ b_changed.txt [unstaged:M]")
+    local has_filler_between = false
+
+    assert.is_not_nil(original_deleted_header, "Deleted file should still have an original-side virtual header")
+    assert.is_not_nil(deleted_header, "Deleted file should still have a modified-side virtual header")
+    assert.is_not_nil(changed_header, "Following file should have a modified-side virtual header")
+    assert.is_true(deleted_header < changed_header, "Deleted file header should render before the following file header")
+
+    for line = deleted_header + 1, changed_header - 1 do
+      if modified_headers[line] and modified_headers[line]:find("╱", 1, true) then
+        has_filler_between = true
+        break
+      end
+    end
+
+    assert.is_true(has_filler_between, "Empty-side filler should render between adjacent virtual file headers")
   end)
 
   it("writes edited modified review sections to their backing files", function()

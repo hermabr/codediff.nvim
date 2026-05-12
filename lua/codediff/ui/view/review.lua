@@ -312,7 +312,7 @@ local function treesitter_language_for_path(path)
   return filetype
 end
 
-local function header_virtual_lines(file, side, first)
+local function header_virtual_lines(file, side, first, filler_count)
   local prefix = side == "original" and "---" or "+++"
   local label = string.format("[%s:%s]", file.group or "unstaged", file.status or "?")
   local lines = {}
@@ -322,6 +322,9 @@ local function header_virtual_lines(file, side, first)
   table.insert(lines, { { string.rep("=", HEADER_WIDTH), "Title" } })
   table.insert(lines, { { string.format("%s %s %s", prefix, side_path(file, side), label), "Comment" } })
   table.insert(lines, { { string.rep("-", HEADER_WIDTH), "Title" } })
+  for _ = 1, filler_count or 0 do
+    table.insert(lines, { { string.rep("╱", 500), "CodeDiffFiller" } })
+  end
   return lines
 end
 
@@ -375,14 +378,33 @@ end
 
 local function render_headers(bufnr, sections, side)
   local line_count = vim.api.nvim_buf_line_count(bufnr)
+  local groups = {}
+  local order = {}
+
   for _, section in ipairs(sections) do
     local start_line = side == "original" and section.original_header_start or section.modified_header_start
     local above = side == "original" and section.original_header_above or section.modified_header_above
     local virt_lines = side == "original" and section.original_header_lines or section.modified_header_lines
     local row = math.max(math.min((start_line or 1) - 1, line_count - 1), 0)
-    pcall(vim.api.nvim_buf_set_extmark, bufnr, ns_review, row, 0, {
-      virt_lines = virt_lines,
-      virt_lines_above = above ~= false,
+    local key = row .. ":" .. tostring(above ~= false)
+    local group = groups[key]
+    if not group then
+      group = {
+        row = row,
+        above = above,
+        lines = {},
+      }
+      groups[key] = group
+      table.insert(order, group)
+    end
+
+    append_lines(group.lines, virt_lines)
+  end
+
+  for _, group in ipairs(order) do
+    pcall(vim.api.nvim_buf_set_extmark, bufnr, ns_review, group.row, 0, {
+      virt_lines = group.lines,
+      virt_lines_above = group.above ~= false,
       virt_lines_leftcol = true,
       priority = config.options.diff.highlight_priority,
     })
@@ -443,7 +465,7 @@ end
 local function build_review(results)
   local original_lines = {}
   local modified_lines = {}
-  local combined_diff = { changes = {}, moves = {} }
+  local combined_diff = { changes = {}, moves = {}, sections = {} }
   local sections = {}
   local syntax_sections = {}
 
@@ -463,6 +485,8 @@ local function build_review(results)
     local modified_content_start = modified_offset + 1
     local original_header_start, original_header_above = header_anchor(original_offset, original_content_start, original_content_count)
     local modified_header_start, modified_header_above = header_anchor(modified_offset, modified_content_start, modified_content_count)
+    local original_header_filler_count = original_content_count == 0 and modified_content_count or 0
+    local modified_header_filler_count = modified_content_count == 0 and original_content_count or 0
 
     append_lines(original_lines, result.original_lines)
     append_lines(modified_lines, result.modified_lines)
@@ -480,12 +504,17 @@ local function build_review(results)
       modified_header_start = modified_header_start,
       original_header_above = original_header_above,
       modified_header_above = modified_header_above,
-      original_header_lines = header_virtual_lines(result.file, "original", first),
-      modified_header_lines = header_virtual_lines(result.file, "modified", first),
+      original_header_lines = header_virtual_lines(result.file, "original", first, original_header_filler_count),
+      modified_header_lines = header_virtual_lines(result.file, "modified", first, modified_header_filler_count),
       original_content_start = original_content_start,
       modified_content_start = modified_content_start,
       original_content_end = original_content_start + original_content_count,
       modified_content_end = modified_content_start + modified_content_count,
+    })
+
+    table.insert(combined_diff.sections, {
+      original_start = original_content_start,
+      modified_start = modified_content_start,
     })
 
     table.insert(syntax_sections, {
@@ -500,10 +529,15 @@ local function build_review(results)
     local lines_diff = diff_module.compute_diff(result.original_lines or {}, result.modified_lines or {}, diff_options)
     if lines_diff then
       for _, mapping in ipairs(lines_diff.changes or {}) do
-        table.insert(combined_diff.changes, shift_mapping(mapping, original_offset, modified_offset))
+        local shifted = shift_mapping(mapping, original_offset, modified_offset)
+        shifted.section_index = index
+        shifted.suppress_filler = original_header_filler_count > 0 or modified_header_filler_count > 0
+        table.insert(combined_diff.changes, shifted)
       end
       for _, move in ipairs(lines_diff.moves or {}) do
-        table.insert(combined_diff.moves, shift_move(move, original_offset, modified_offset))
+        local shifted = shift_move(move, original_offset, modified_offset)
+        shifted.section_index = index
+        table.insert(combined_diff.moves, shifted)
       end
     end
   end
