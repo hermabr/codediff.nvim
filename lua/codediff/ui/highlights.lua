@@ -144,11 +144,17 @@ function M.setup()
     default = true,
   })
 
-  -- Filler lines (no highlight, inherits editor default background)
+  local normal_hl = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+  local filler_bg = normal_hl.bg
+  if filler_bg then
+    filler_bg = adjust_brightness(filler_bg, vim.o.background == "light" and 0.85 or 1.45)
+  end
+
+  -- Filler lines use blank text with a subtle background to mark missing rows.
   vim.api.nvim_set_hl(0, "CodeDiffFiller", {
-    fg = "#444444", -- Subtle gray for the slash character
+    bg = filler_bg or 0x1f2428,
+    ctermbg = base256_greyscale(vim.o.background == "light" and 22 or 2),
     ctermfg = base256_greyscale(8),
-    default = true,
   })
 
   -- Explorer directory text (smaller and dimmed)

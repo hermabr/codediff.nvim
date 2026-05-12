@@ -20,7 +20,6 @@ local ns_review_sections = vim.api.nvim_create_namespace("codediff-review-sectio
 local ns_review_syntax = vim.api.nvim_create_namespace("codediff-review-syntax")
 local TREESITTER_PRIORITY = (vim.hl and vim.hl.priorities and vim.hl.priorities.treesitter) or 100
 local REVIEW_SYNTAX_PRIORITY = TREESITTER_PRIORITY + 1
-local FILLER_TEXT = string.rep("╱", 500)
 
 local function append_lines(target, lines)
   for _, line in ipairs(lines or {}) do
@@ -436,8 +435,6 @@ local function render_placeholder_fillers(bufnr, sections, side)
             end_col = 0,
             hl_group = "CodeDiffFiller",
             hl_eol = true,
-            virt_text = { { FILLER_TEXT, "CodeDiffFiller" } },
-            virt_text_pos = "overlay",
             priority = config.options.diff.highlight_priority,
           })
         end
