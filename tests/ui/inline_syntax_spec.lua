@@ -30,6 +30,29 @@ describe("Inline virt_lines syntax highlighting", function()
     assert.is_true(has_keyword, "Should detect 'local' as @keyword")
   end)
 
+  it("computes injected language highlights for Markdown fenced code", function()
+    local lines = {
+      "# Notes",
+      "",
+      "```lua",
+      "local value = 1",
+      "```",
+    }
+    local result = inline.compute_syntax_highlights(lines, "markdown")
+
+    assert.is_truthy(result[4], "Fenced Lua line should have syntax highlights")
+
+    local has_keyword = false
+    for _, hl in ipairs(result[4]) do
+      if hl.hl_group:match("keyword") then
+        has_keyword = true
+        break
+      end
+    end
+
+    assert.is_true(has_keyword, "Markdown fenced Lua should detect 'local' as @keyword")
+  end)
+
   -- Test 2: compute_syntax_highlights returns empty for unknown filetype
   it("returns empty for unknown filetype", function()
     local lines = { "hello world" }

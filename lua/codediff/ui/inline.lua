@@ -67,29 +67,34 @@ function M.compute_syntax_highlights(lines, filetype)
     return {}
   end
 
-  local ok2, trees = pcall(parser.parse, parser)
+  -- Passing true parses the full source and builds injected language trees,
+  -- which is required for Markdown fenced code blocks.
+  local ok2, trees = pcall(parser.parse, parser, true)
+  if not ok2 then
+    ok2, trees = pcall(parser.parse, parser)
+  end
   if not ok2 or not trees or #trees == 0 then
     return {}
   end
 
-  local query_ok, query = pcall(vim.treesitter.query.get, filetype, "highlights")
-  if not query_ok or not query then
-    return {}
-  end
-
   local result = {}
+  local order = 0
 
-  for id, node in query:iter_captures(trees[1]:root(), source) do
-    local r1, c1, r2, c2 = node:range()
-    local hl_group = "@" .. query.captures[id]
-
+  local function add_range(r1, c1, r2, c2, hl_group, priority)
     -- Handle single-line captures
     if r1 == r2 then
       local line_num = r1 + 1 -- 1-based
       if not result[line_num] then
         result[line_num] = {}
       end
-      table.insert(result[line_num], { start_col = c1 + 1, end_col = c2, hl_group = hl_group })
+      order = order + 1
+      table.insert(result[line_num], {
+        start_col = c1 + 1,
+        end_col = c2,
+        hl_group = hl_group,
+        priority = priority,
+        order = order,
+      })
     else
       -- Multi-line capture: split across lines
       for row = r1, r2 do
@@ -102,15 +107,50 @@ function M.compute_syntax_highlights(lines, filetype)
         local sc = (row == r1) and (c1 + 1) or 1
         local ec = (row == r2) and c2 or #line_text
         if ec >= sc then
-          table.insert(result[line_num], { start_col = sc, end_col = ec, hl_group = hl_group })
+          order = order + 1
+          table.insert(result[line_num], {
+            start_col = sc,
+            end_col = ec,
+            hl_group = hl_group,
+            priority = priority,
+            order = order,
+          })
         end
       end
     end
   end
 
+  parser:for_each_tree(function(tree, language_tree)
+    local language = language_tree:lang()
+    local query_ok, query = pcall(vim.treesitter.query.get, language, "highlights")
+    if not query_ok or not query then
+      return
+    end
+
+    for id, node, metadata in query:iter_captures(tree:root(), source) do
+      local hl_group = "@" .. query.captures[id]
+      local priority = nil
+      if metadata then
+        priority = tonumber(metadata.priority)
+        if not priority and metadata[id] then
+          priority = tonumber(metadata[id].priority)
+        end
+      end
+      local r1, c1, r2, c2 = node:range()
+      if metadata and metadata[id] and vim.treesitter.get_range then
+        r1, c1, r2, c2 = vim.treesitter.get_range(node, source, metadata[id])
+      end
+
+      add_range(r1, c1, r2, c2, hl_group, priority)
+    end
+  end)
+
   -- Sort each line's highlights by start_col
   for _, line_hls in pairs(result) do
     table.sort(line_hls, function(a, b)
+      if a.start_col == b.start_col then
+        return (a.order or 0) < (b.order or 0)
+      end
       return a.start_col < b.start_col
     end)
   end
