@@ -322,8 +322,21 @@ function M.render_diff(left_bufnr, right_bufnr, original_lines, modified_lines, 
 
   local last_orig_line = 1
   local last_mod_line = 1
+  local current_section_index = nil
 
   for _, mapping in ipairs(lines_diff.changes) do
+    if mapping.section_index and mapping.section_index ~= current_section_index then
+      local section = lines_diff.sections and lines_diff.sections[mapping.section_index]
+      if section then
+        last_orig_line = section.original_start
+        last_mod_line = section.modified_start
+      else
+        last_orig_line = mapping.original.start_line
+        last_mod_line = mapping.modified.start_line
+      end
+      current_section_index = mapping.section_index
+    end
+
     local orig_is_empty = (mapping.original.end_line <= mapping.original.start_line)
     local mod_is_empty = (mapping.modified.end_line <= mapping.modified.start_line)
 
@@ -347,18 +360,23 @@ function M.render_diff(left_bufnr, right_bufnr, original_lines, modified_lines, 
       end
     end
 
-    local fillers, new_last_orig, new_last_mod = calculate_fillers(mapping, original_lines, modified_lines, last_orig_line, last_mod_line)
+    if mapping.suppress_filler then
+      last_orig_line = mapping.original.end_line
+      last_mod_line = mapping.modified.end_line
+    else
+      local fillers, new_last_orig, new_last_mod = calculate_fillers(mapping, original_lines, modified_lines, last_orig_line, last_mod_line)
 
-    last_orig_line = new_last_orig
-    last_mod_line = new_last_mod
+      last_orig_line = new_last_orig
+      last_mod_line = new_last_mod
 
-    for _, filler in ipairs(fillers) do
-      if filler.buffer == "original" then
-        insert_filler_lines(left_bufnr, filler.after_line - 1, filler.count)
-        total_left_fillers = total_left_fillers + filler.count
-      else
-        insert_filler_lines(right_bufnr, filler.after_line - 1, filler.count)
-        total_right_fillers = total_right_fillers + filler.count
+      for _, filler in ipairs(fillers) do
+        if filler.buffer == "original" then
+          insert_filler_lines(left_bufnr, filler.after_line - 1, filler.count)
+          total_left_fillers = total_left_fillers + filler.count
+        else
+          insert_filler_lines(right_bufnr, filler.after_line - 1, filler.count)
+          total_right_fillers = total_right_fillers + filler.count
+        end
       end
     end
   end

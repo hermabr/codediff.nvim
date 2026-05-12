@@ -3,6 +3,7 @@ local M = {}
 
 local lifecycle = require("codediff.ui.lifecycle")
 local config = require("codediff.config")
+local scroll_sync = require("codediff.ui.view.scroll_sync")
 
 -- Module-level state: maps window ID → set of visible line numbers
 local visible_lines_by_win = {}
@@ -30,8 +31,11 @@ function M.compute_visible_lines(changes, side, line_count, context_lines)
     local range_start = range.start_line
     local range_end = range.end_line -- exclusive
 
-    -- For zero-width ranges (pure insertion/deletion), use start_line as anchor
+    -- For zero-width ranges (pure insertion/deletion), the alignment filler is
+    -- attached after the line before start_line. Keep that anchor visible so
+    -- compact folds do not hide the virtual filler rows.
     if range_start == range_end then
+      range_start = math.max(1, range_start - 1)
       range_end = range_start + 1
     end
 
@@ -51,12 +55,22 @@ local function add_review_header_lines(visible, session, side)
 
   local header_key = side == "original" and "original_header_start" or "modified_header_start"
   local content_key = side == "original" and "original_content_start" or "modified_content_start"
+  local placeholder_start_key = side == "original" and "original_placeholder_start" or "modified_placeholder_start"
+  local placeholder_end_key = side == "original" and "original_placeholder_end" or "modified_placeholder_end"
 
   for _, section in ipairs(session.review_sections or {}) do
     local header_start = section[header_key]
     local content_start = section[content_key]
-    if header_start and content_start then
-      for line = header_start, content_start - 1 do
+    local placeholder_start = section[placeholder_start_key]
+    local placeholder_end = section[placeholder_end_key]
+    if header_start then
+      visible[header_start] = true
+    end
+    if content_start then
+      visible[content_start] = true
+    end
+    if placeholder_start and placeholder_end then
+      for line = placeholder_start, placeholder_end - 1 do
         visible[line] = true
       end
     end
@@ -79,6 +93,18 @@ local function compact_entries(session)
     table.insert(entries, { win = session.modified_win, buf = session.modified_bufnr, side = "modified" })
   end
   return entries
+end
+
+local function apply_compact_folds(entry)
+  vim.wo[entry.win].foldmethod = "expr"
+  vim.wo[entry.win].foldexpr = "v:lua.require'codediff.ui.view.compact'.foldexpr_eval()"
+  vim.wo[entry.win].foldenable = true
+  vim.wo[entry.win].foldlevel = 0
+  vim.wo[entry.win].foldminlines = 1
+
+  vim.api.nvim_win_call(entry.win, function()
+    vim.cmd("silent! normal! zX")
+  end)
 end
 
 local function has_conflict_result(session)
@@ -121,6 +147,7 @@ function M.enable(tabpage)
         foldminlines = vim.wo[entry.win].foldminlines,
         foldenable = vim.wo[entry.win].foldenable,
         foldtext = vim.wo[entry.win].foldtext,
+        scrollbind = vim.wo[entry.win].scrollbind,
       }
 
       -- Compute visible lines
@@ -128,15 +155,12 @@ function M.enable(tabpage)
       visible_lines_by_win[entry.win] = compute_visible_lines_for_session(session, entry.side, line_count, context)
 
       -- Apply fold settings
-      vim.wo[entry.win].foldmethod = "expr"
-      vim.wo[entry.win].foldexpr = "v:lua.require'codediff.ui.view.compact'.foldexpr_eval()"
-      vim.wo[entry.win].foldenable = true
-      vim.wo[entry.win].foldlevel = 0
-      vim.wo[entry.win].foldminlines = 1
+      apply_compact_folds(entry)
     end
   end
 
   session.compact_mode = true
+  scroll_sync.enable(tabpage)
   return true
 end
 
@@ -150,6 +174,7 @@ function M.disable(tabpage)
   end
 
   local saved = session.compact_saved_fold_state or {}
+  scroll_sync.disable(tabpage)
   for win, fold_state in pairs(saved) do
     if vim.api.nvim_win_is_valid(win) then
       vim.wo[win].foldmethod = fold_state.foldmethod
@@ -158,6 +183,7 @@ function M.disable(tabpage)
       vim.wo[win].foldminlines = fold_state.foldminlines
       vim.wo[win].foldenable = fold_state.foldenable
       vim.wo[win].foldtext = fold_state.foldtext
+      vim.wo[win].scrollbind = fold_state.scrollbind
     end
     visible_lines_by_win[win] = nil
   end
@@ -209,13 +235,11 @@ function M.reapply(tabpage)
       local line_count = vim.api.nvim_buf_line_count(entry.buf)
       visible_lines_by_win[entry.win] = compute_visible_lines_for_session(session, entry.side, line_count, context)
 
-      vim.wo[entry.win].foldmethod = "expr"
-      vim.wo[entry.win].foldexpr = "v:lua.require'codediff.ui.view.compact'.foldexpr_eval()"
-      vim.wo[entry.win].foldenable = true
-      vim.wo[entry.win].foldlevel = 0
-      vim.wo[entry.win].foldminlines = 1
+      apply_compact_folds(entry)
     end
   end
+
+  scroll_sync.enable(tabpage)
 end
 
 --- Refresh compact mode after diff recomputation.

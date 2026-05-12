@@ -37,6 +37,7 @@ local function cleanup_diff(tabpage)
   local auto_refresh = require("codediff.ui.auto_refresh")
   auto_refresh.disable(diff.original_bufnr)
   auto_refresh.disable(diff.modified_bufnr)
+  require("codediff.ui.view.scroll_sync").disable(tabpage)
 
   -- Clear highlights from both buffers
   state.clear_buffer_highlights(diff.original_bufnr)
