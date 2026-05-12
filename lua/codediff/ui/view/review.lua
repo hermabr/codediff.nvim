@@ -15,6 +15,7 @@ local welcome_window = require("codediff.ui.view.welcome_window")
 
 local HEADER_WIDTH = 80
 local ns_review = vim.api.nvim_create_namespace("codediff-review")
+local ns_review_sections = vim.api.nvim_create_namespace("codediff-review-sections")
 local ns_review_syntax = vim.api.nvim_create_namespace("codediff-review-syntax")
 local TREESITTER_PRIORITY = (vim.hl and vim.hl.priorities and vim.hl.priorities.treesitter) or 100
 local REVIEW_SYNTAX_PRIORITY = TREESITTER_PRIORITY + 1
@@ -44,26 +45,29 @@ local function copy_lines(lines)
   return vim.deepcopy(lines or {})
 end
 
-local function create_review_buffer(name, editable)
+local function create_review_buffer(name, opts)
+  opts = opts or {}
+  local editable = opts.editable ~= false
   local bufnr = vim.api.nvim_create_buf(false, true)
   vim.bo[bufnr].buftype = editable and "acwrite" or "nofile"
   vim.bo[bufnr].bufhidden = "wipe"
   vim.bo[bufnr].swapfile = false
   vim.bo[bufnr].filetype = "codediff-review"
-  vim.bo[bufnr].modifiable = editable == true
-  vim.bo[bufnr].readonly = editable ~= true
+  vim.bo[bufnr].readonly = not editable
+  vim.bo[bufnr].modifiable = editable
   pcall(vim.api.nvim_buf_set_name, bufnr, name)
   return bufnr
 end
 
 local function set_buffer_lines(bufnr, lines)
-  local modifiable = vim.bo[bufnr].modifiable
-  local readonly = vim.bo[bufnr].readonly
+  local was_modifiable = vim.bo[bufnr].modifiable
+  local was_readonly = vim.bo[bufnr].readonly
+  vim.bo[bufnr].readonly = false
   vim.bo[bufnr].modifiable = true
   vim.bo[bufnr].readonly = false
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, #lines > 0 and lines or { "" })
-  vim.bo[bufnr].modifiable = modifiable
-  vim.bo[bufnr].readonly = readonly
+  vim.bo[bufnr].modifiable = was_modifiable
+  vim.bo[bufnr].readonly = was_readonly
   vim.bo[bufnr].modified = false
 end
 
@@ -439,6 +443,64 @@ local function render_placeholder_fillers(bufnr, sections, side)
       end
     end
   end
+end
+
+local function attach_section_marks(original_buf, modified_buf, sections)
+  vim.api.nvim_buf_clear_namespace(original_buf, ns_review_sections, 0, -1)
+  vim.api.nvim_buf_clear_namespace(modified_buf, ns_review_sections, 0, -1)
+
+  local mark_opts = { right_gravity = false }
+  for _, section in ipairs(sections) do
+    section.original_header_mark =
+      vim.api.nvim_buf_set_extmark(original_buf, ns_review_sections, section.original_header_start - 1, 0, mark_opts)
+    section.original_content_mark =
+      vim.api.nvim_buf_set_extmark(original_buf, ns_review_sections, section.original_content_start - 1, 0, mark_opts)
+    section.modified_header_mark =
+      vim.api.nvim_buf_set_extmark(modified_buf, ns_review_sections, section.modified_header_start - 1, 0, mark_opts)
+    section.modified_content_mark =
+      vim.api.nvim_buf_set_extmark(modified_buf, ns_review_sections, section.modified_content_start - 1, 0, mark_opts)
+  end
+end
+
+local function line_from_mark(bufnr, mark_id, fallback)
+  if mark_id then
+    local ok, pos = pcall(vim.api.nvim_buf_get_extmark_by_id, bufnr, ns_review_sections, mark_id, {})
+    if ok and pos and pos[1] then
+      return pos[1] + 1
+    end
+  end
+
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  return math.max(1, math.min(fallback or 1, line_count))
+end
+
+local function sync_section_positions(session)
+  local sections = session.review_sections or {}
+  for _, section in ipairs(sections) do
+    section.original_header_start =
+      line_from_mark(session.original_bufnr, section.original_header_mark, section.original_header_start)
+    section.original_content_start =
+      line_from_mark(session.original_bufnr, section.original_content_mark, section.original_content_start)
+    section.modified_header_start =
+      line_from_mark(session.modified_bufnr, section.modified_header_mark, section.modified_header_start)
+    section.modified_content_start =
+      line_from_mark(session.modified_bufnr, section.modified_content_mark, section.modified_content_start)
+  end
+
+  local modified_entries = session.review_write_sections and session.review_write_sections[session.modified_bufnr] or {}
+  for _, entry in ipairs(modified_entries) do
+    local section = sections[entry.section_index]
+    if section and entry.start_row and entry.end_row then
+      section.modified_content_start = entry.start_row + 1
+      section.modified_content_end = entry.end_row + 1
+      if not section.modified_placeholder_start then
+        section.modified_header_start = section.modified_content_start
+        section.modified_header_above = true
+      end
+    end
+  end
+
+  return sections
 end
 
 local function apply_section_syntax(bufnr, start_line, lines, language)
@@ -860,6 +922,102 @@ local function setup_writeback(tabpage, bufnr)
   })
 end
 
+local function entry_for_section(entries, section_index)
+  for _, entry in ipairs(entries or {}) do
+    if entry.section_index == section_index then
+      return entry
+    end
+  end
+  return nil
+end
+
+local function section_content_range(bufnr, sections, index, side, entries)
+  local section = sections[index]
+  if not section then
+    return 1, 1
+  end
+
+  local entry = entry_for_section(entries, index)
+  if entry then
+    local start_row, end_row = edit_range(bufnr, entry)
+    if start_row then
+      return start_row + 1, end_row + 1
+    end
+  end
+
+  local content_start = section[side .. "_content_start"] or 1
+  local content_end = section[side .. "_content_end"] or content_start
+  local placeholder_start = section[side .. "_placeholder_start"]
+  local placeholder_end = section[side .. "_placeholder_end"]
+
+  if placeholder_start and placeholder_end and content_end <= content_start then
+    return content_start, content_start
+  end
+
+  local next_section = sections[index + 1]
+  local next_start = next_section and next_section[side .. "_content_start"] or (vim.api.nvim_buf_line_count(bufnr) + 1)
+  return content_start, math.max(content_start, next_start)
+end
+
+local function get_section_lines(bufnr, sections, index, side, entries)
+  local start_line, end_line = section_content_range(bufnr, sections, index, side, entries)
+  local start_idx = math.max(start_line - 1, 0)
+  local end_idx = math.max(end_line - 1, start_idx)
+  return vim.api.nvim_buf_get_lines(bufnr, start_idx, end_idx, false), start_line
+end
+
+local function build_review_diff_from_buffers(session, original_buf, modified_buf, sections)
+  local combined_diff = { changes = {}, moves = {}, sections = {} }
+  local syntax_sections = {}
+  local write_sections = session and session.review_write_sections or {}
+  local original_entries = write_sections[original_buf]
+  local modified_entries = write_sections[modified_buf]
+
+  local diff_options = {
+    max_computation_time_ms = config.options.diff.max_computation_time_ms,
+    ignore_trim_whitespace = config.options.diff.ignore_trim_whitespace,
+    compute_moves = config.options.diff.compute_moves,
+  }
+
+  for index, section in ipairs(sections) do
+    local original_lines, original_start = get_section_lines(original_buf, sections, index, "original", original_entries)
+    local modified_lines, modified_start = get_section_lines(modified_buf, sections, index, "modified", modified_entries)
+    local original_offset = original_start - 1
+    local modified_offset = modified_start - 1
+
+    table.insert(combined_diff.sections, {
+      original_start = original_start,
+      modified_start = modified_start,
+    })
+
+    table.insert(syntax_sections, {
+      original_content_start = original_start,
+      modified_content_start = modified_start,
+      original_lines = original_lines,
+      modified_lines = modified_lines,
+      original_language = treesitter_language_for_path(side_path(section, "original")),
+      modified_language = treesitter_language_for_path(side_path(section, "modified")),
+    })
+
+    local lines_diff = diff_module.compute_diff(original_lines, modified_lines, diff_options)
+    if lines_diff then
+      for _, mapping in ipairs(lines_diff.changes or {}) do
+        local shifted = shift_mapping(mapping, original_offset, modified_offset)
+        shifted.section_index = index
+        shifted.suppress_filler = section.original_placeholder_start ~= nil or section.modified_placeholder_start ~= nil
+        table.insert(combined_diff.changes, shifted)
+      end
+      for _, move in ipairs(lines_diff.moves or {}) do
+        local shifted = shift_move(move, original_offset, modified_offset)
+        shifted.section_index = index
+        table.insert(combined_diff.moves, shifted)
+      end
+    end
+  end
+
+  return combined_diff, syntax_sections
+end
+
 local function setup_windows(original_win, modified_win)
   local win_opts = {
     cursorline = true,
@@ -883,6 +1041,7 @@ local function render_review(tabpage, original_buf, modified_buf, original_win, 
 
   set_buffer_lines(original_buf, original_lines)
   set_buffer_lines(modified_buf, modified_lines)
+  attach_section_marks(original_buf, modified_buf, sections)
 
   vim.api.nvim_buf_clear_namespace(original_buf, ns_review, 0, -1)
   vim.api.nvim_buf_clear_namespace(modified_buf, ns_review, 0, -1)
@@ -923,6 +1082,10 @@ local function render_review(tabpage, original_buf, modified_buf, original_win, 
   end
 
   compact.apply_default_and_reapply(tabpage)
+  require("codediff.ui.auto_refresh").enable(original_buf)
+  require("codediff.ui.auto_refresh").enable(modified_buf)
+  vim.bo[original_buf].modified = false
+  vim.bo[modified_buf].modified = false
 
   if #errors > 0 then
     vim.notify(string.format("CodeDiff review skipped %d file content load(s)", #errors), vim.log.levels.WARN)
@@ -931,6 +1094,76 @@ local function render_review(tabpage, original_buf, modified_buf, original_win, 
   if on_ready then
     on_ready()
   end
+end
+
+function M.refresh(tabpage)
+  local session = lifecycle.get_session(tabpage)
+  if not session or session.mode ~= "review" then
+    return false
+  end
+
+  local original_buf = session.original_bufnr
+  local modified_buf = session.modified_bufnr
+  if
+    not original_buf
+    or not modified_buf
+    or not vim.api.nvim_buf_is_valid(original_buf)
+    or not vim.api.nvim_buf_is_valid(modified_buf)
+  then
+    return false
+  end
+
+  local sections = sync_section_positions(session)
+  local combined_diff, syntax_sections = build_review_diff_from_buffers(session, original_buf, modified_buf, sections)
+  local original_lines = vim.api.nvim_buf_get_lines(original_buf, 0, -1, false)
+  local modified_lines = vim.api.nvim_buf_get_lines(modified_buf, 0, -1, false)
+  attach_section_marks(original_buf, modified_buf, sections)
+
+  vim.api.nvim_buf_clear_namespace(original_buf, ns_review, 0, -1)
+  vim.api.nvim_buf_clear_namespace(modified_buf, ns_review, 0, -1)
+
+  core.render_diff(original_buf, modified_buf, original_lines, modified_lines, combined_diff)
+  render_headers(original_buf, sections, "original")
+  render_headers(modified_buf, sections, "modified")
+  render_placeholder_fillers(original_buf, sections, "original")
+  render_placeholder_fillers(modified_buf, sections, "modified")
+  apply_syntax_highlights(original_buf, syntax_sections, "original")
+  apply_syntax_highlights(modified_buf, syntax_sections, "modified")
+
+  lifecycle.update_diff_result(tabpage, combined_diff)
+  lifecycle.update_changedtick(
+    tabpage,
+    vim.api.nvim_buf_get_changedtick(original_buf),
+    vim.api.nvim_buf_get_changedtick(modified_buf)
+  )
+  compact.refresh(tabpage)
+
+  local original_win = session.original_win
+  local modified_win = session.modified_win
+  if original_win and modified_win and vim.api.nvim_win_is_valid(original_win) and vim.api.nvim_win_is_valid(modified_win) then
+    local current_win = vim.api.nvim_get_current_win()
+    local orig_cursor = vim.api.nvim_win_get_cursor(original_win)
+    local mod_cursor = vim.api.nvim_win_get_cursor(modified_win)
+    vim.wo[original_win].scrollbind = false
+    vim.wo[modified_win].scrollbind = false
+    render.establish_scrollbind(
+      original_win,
+      modified_win,
+      original_buf,
+      modified_buf,
+      combined_diff,
+      orig_cursor,
+      mod_cursor
+    )
+    if current_win and vim.api.nvim_win_is_valid(current_win) then
+      vim.api.nvim_set_current_win(current_win)
+    end
+  end
+
+  vim.bo[original_buf].modified = false
+  vim.bo[modified_buf].modified = false
+
+  return true
 end
 
 ---@param session_config SessionConfig
@@ -947,8 +1180,8 @@ function M.create(session_config, _filetype, on_ready)
   vim.cmd(split_cmd)
   local modified_win = vim.api.nvim_get_current_win()
 
-  local original_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].original", false)
-  local modified_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].modified", true)
+  local original_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].original", { editable = false })
+  local modified_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].modified", { editable = true })
   vim.api.nvim_win_set_buf(original_win, original_buf)
   vim.api.nvim_win_set_buf(modified_win, modified_buf)
   welcome_window.sync(original_win)
@@ -982,6 +1215,7 @@ function M.create(session_config, _filetype, on_ready)
       end
     end
   )
+  view_keymaps.setup_all_keymaps(tabpage, original_buf, modified_buf, false)
 
   setup_writeback(tabpage, modified_buf)
   setup_boundary_insert_keymaps(tabpage, modified_buf)

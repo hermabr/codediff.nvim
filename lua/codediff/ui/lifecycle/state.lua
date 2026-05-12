@@ -125,6 +125,15 @@ local function resume_diff(tabpage)
     return
   end
 
+  if diff.mode == "review" then
+    require("codediff.ui.view.review").refresh(tabpage)
+    local auto_refresh = require("codediff.ui.auto_refresh")
+    auto_refresh.enable(diff.original_bufnr)
+    auto_refresh.enable(diff.modified_bufnr)
+    diff.suspended = false
+    return
+  end
+
   -- Check if buffer or file changed while suspended
   local original_tick_changed = vim.api.nvim_buf_get_changedtick(diff.original_bufnr) ~= diff.changedtick.original
   local modified_tick_changed = vim.api.nvim_buf_get_changedtick(diff.modified_bufnr) ~= diff.changedtick.modified

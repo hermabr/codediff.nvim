@@ -71,6 +71,17 @@ local function do_diff_update(bufnr, skip_watcher_check)
     return
   end
 
+  local session = lifecycle.get_session(tabpage)
+  if session and session.mode == "review" then
+    vim.schedule(function()
+      local ok, review = pcall(require, "codediff.ui.view.review")
+      if ok and review then
+        review.refresh(tabpage)
+      end
+    end)
+    return
+  end
+
   -- Get fresh buffer content
   local original_lines = vim.api.nvim_buf_get_lines(original_bufnr, 0, -1, false)
   local modified_lines = vim.api.nvim_buf_get_lines(modified_bufnr, 0, -1, false)

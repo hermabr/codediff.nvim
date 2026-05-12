@@ -576,11 +576,11 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
   end
 
   -- Diff get/put (do, dp) - layout-aware semantics
-  if keymaps.diff_get and not is_review_mode then
+  if keymaps.diff_get then
     local desc = is_inline and "Revert hunk to original" or "Get change from other buffer"
     lifecycle.set_tab_keymap(tabpage, "n", keymaps.diff_get, diff_get, { desc = desc })
   end
-  if keymaps.diff_put and not is_review_mode then
+  if keymaps.diff_put then
     local desc = is_inline and "Accept change (no-op in inline)" or "Put change to other buffer"
     lifecycle.set_tab_keymap(tabpage, "n", keymaps.diff_put, diff_put, { desc = desc })
   end

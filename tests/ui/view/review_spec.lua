@@ -120,6 +120,21 @@ local function feedkeys(keys)
   end, 10)
 end
 
+local function line_has_diff_highlight(bufnr, line, pattern)
+  local diff_ns = vim.api.nvim_get_namespaces()["codediff-highlight"]
+  assert.is_not_nil(diff_ns, "Diff highlight namespace should exist")
+
+  local marks = vim.api.nvim_buf_get_extmarks(bufnr, diff_ns, 0, -1, { details = true })
+  for _, mark in ipairs(marks) do
+    local details = mark[4] or {}
+    if mark[2] == line - 1 and type(details.hl_group) == "string" and details.hl_group:match(pattern) then
+      return true
+    end
+  end
+
+  return false
+end
+
 local function setup_command()
   pcall(vim.api.nvim_del_user_command, "CodeDiff")
   local commands = require("codediff.commands")
@@ -168,6 +183,15 @@ describe("CodeDiff review view", function()
     repo.git("commit -m initial")
     repo.write_file("first.txt", { "one", "TWO" })
     repo.write_file("second.txt", { "new file" })
+    vim.fn.chdir(repo.dir)
+  end
+
+  local function create_repo_with_single_change()
+    repo = h.create_temp_git_repo()
+    repo.write_file("first.txt", { "one", "two" })
+    repo.git("add first.txt")
+    repo.git("commit -m initial")
+    repo.write_file("first.txt", { "one", "TWO" })
     vim.fn.chdir(repo.dir)
   end
 
@@ -383,6 +407,70 @@ describe("CodeDiff review view", function()
     assert.is_not_nil(find_line(modified_lines, "TWO"), "Modified content should be present in the review buffer")
     assert.is_not_nil(find_line(modified_lines, "new file"), "Untracked content should be present in the review buffer")
     assert.is_true(find_line(modified_lines, "TWO") < find_line(modified_lines, "new file"), "Files should be rendered sequentially in one review buffer")
+  end)
+
+  it("keeps the original review buffer read-only", function()
+    create_repo_with_single_change()
+
+    vim.cmd("CodeDiff review")
+    local _, session = wait_for_review()
+
+    assert.is_false(vim.bo[session.original_bufnr].modifiable, "Original review buffer should not be editable")
+    assert.is_true(vim.bo[session.original_bufnr].readonly, "Original review buffer should be readonly")
+    assert.is_true(vim.bo[session.modified_bufnr].modifiable, "Modified review buffer should remain editable")
+    assert.is_false(vim.bo[session.modified_bufnr].readonly, "Modified review buffer should remain writable")
+  end)
+
+  it("installs the quit keymap immediately", function()
+    create_repo_with_single_change()
+    local initial_tab_count = #vim.api.nvim_list_tabpages()
+
+    vim.cmd("CodeDiff review")
+    local tabpage, session = wait_for_review()
+    vim.api.nvim_set_current_win(session.modified_win)
+    vim.cmd("normal q")
+
+    local closed = vim.wait(1000, function()
+      return not vim.api.nvim_tabpage_is_valid(tabpage) or lifecycle.get_session(tabpage) == nil
+    end, 50)
+
+    assert.is_true(closed, "q should close a freshly opened review tab")
+    assert.equal(initial_tab_count, #vim.api.nvim_list_tabpages(), "Review tab should be closed")
+  end)
+
+  it("refreshes review highlights after diffget without diffing headers", function()
+    create_repo_with_single_change()
+
+    vim.cmd("CodeDiff review")
+    local tabpage, session = wait_for_review()
+    local modified_lines = vim.api.nvim_buf_get_lines(session.modified_bufnr, 0, -1, false)
+    local target_line = find_line(modified_lines, "TWO")
+    assert.is_not_nil(target_line, "Changed line should be present before diffget")
+    assert.is_nil(find_line(modified_lines, "+++ first.txt [unstaged:M]"), "Header should remain virtual before diffget")
+    assert.is_true(has_virtual_header(session.modified_bufnr, "+++ first.txt [unstaged:M]"), "Virtual header should be present before diffget")
+    assert.is_true(line_has_diff_highlight(session.modified_bufnr, target_line, "CodeDiffLineInsert"))
+
+    vim.api.nvim_set_current_win(session.modified_win)
+    vim.api.nvim_win_set_cursor(session.modified_win, { target_line, 0 })
+    vim.cmd("normal do")
+
+    local refreshed = vim.wait(2000, function()
+      local current = lifecycle.get_session(tabpage)
+      if not current or not current.stored_diff_result then
+        return false
+      end
+      local current_lines = vim.api.nvim_buf_get_lines(current.modified_bufnr, 0, -1, false)
+      local changes = current.stored_diff_result.changes or {}
+      return current_lines[target_line] == "two" and #changes == 0
+    end, 50)
+
+    assert.is_true(refreshed, "Review diff should refresh after diffget")
+    assert.is_false(line_has_diff_highlight(session.modified_bufnr, target_line, "CodeDiffLineInsert"))
+    assert.is_nil(
+      find_line(vim.api.nvim_buf_get_lines(session.modified_bufnr, 0, -1, false), "+++ first.txt [unstaged:M]"),
+      "Header should remain virtual after diffget"
+    )
+    assert.is_true(has_virtual_header(session.modified_bufnr, "+++ first.txt [unstaged:M]"), "Virtual header should remain present after diffget")
   end)
 
   it("applies syntax highlights for each reviewed file", function()
