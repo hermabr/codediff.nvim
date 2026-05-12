@@ -50,6 +50,42 @@ local function line_has_highlight(bufnr, line, pattern)
   return false
 end
 
+local function virtual_header_lines(bufnr)
+  local review_ns = vim.api.nvim_get_namespaces()["codediff-review"]
+  assert.is_not_nil(review_ns, "Review namespace should exist")
+
+  local lines = {}
+  local marks = vim.api.nvim_buf_get_extmarks(bufnr, review_ns, 0, -1, { details = true })
+  for _, mark in ipairs(marks) do
+    local details = mark[4] or {}
+    for _, virt_line in ipairs(details.virt_lines or {}) do
+      local chunks = {}
+      for _, chunk in ipairs(virt_line) do
+        table.insert(chunks, chunk[1] or "")
+      end
+      table.insert(lines, table.concat(chunks))
+    end
+  end
+
+  return lines
+end
+
+local function has_virtual_header(bufnr, needle)
+  for _, line in ipairs(virtual_header_lines(bufnr)) do
+    if line:find(needle, 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
+local function feedkeys(keys)
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "x", false)
+  vim.wait(1000, function()
+    return vim.api.nvim_get_mode().mode == "n"
+  end, 10)
+end
+
 local function setup_command()
   pcall(vim.api.nvim_del_user_command, "CodeDiff")
   local commands = require("codediff.commands")
@@ -162,16 +198,15 @@ describe("CodeDiff review view", function()
     assert.equal(2, #vim.api.nvim_tabpage_list_wins(tabpage), "Review mode should only create the two diff windows")
     assert.equal(2, #session.review_sections, "Review should include both changed files")
 
-    local first_header = find_line(modified_lines, "+++ first.txt [unstaged:M]")
-    local second_header = find_line(modified_lines, "+++ second.txt [unstaged:??]")
-    assert.is_not_nil(first_header, "Modified review buffer should include the modified file header")
-    assert.is_not_nil(second_header, "Modified review buffer should include the untracked file header")
-    assert.is_true(first_header < second_header, "Files should be rendered sequentially in one review buffer")
-
-    assert.is_not_nil(find_line(original_lines, "--- first.txt [unstaged:M]"), "Original review buffer should include the modified file header")
-    assert.is_not_nil(find_line(original_lines, "--- /dev/null [unstaged:??]"), "Original review buffer should show /dev/null for untracked files")
+    assert.is_nil(find_line(modified_lines, "+++ first.txt [unstaged:M]"), "Modified file headers should be virtual")
+    assert.is_nil(find_line(original_lines, "--- first.txt [unstaged:M]"), "Original file headers should be virtual")
+    assert.is_true(has_virtual_header(session.modified_bufnr, "+++ first.txt [unstaged:M]"), "Modified review buffer should include the modified file header")
+    assert.is_true(has_virtual_header(session.modified_bufnr, "+++ second.txt [unstaged:??]"), "Modified review buffer should include the untracked file header")
+    assert.is_true(has_virtual_header(session.original_bufnr, "--- first.txt [unstaged:M]"), "Original review buffer should include the modified file header")
+    assert.is_true(has_virtual_header(session.original_bufnr, "--- /dev/null [unstaged:??]"), "Original review buffer should show /dev/null for untracked files")
     assert.is_not_nil(find_line(modified_lines, "TWO"), "Modified content should be present in the review buffer")
     assert.is_not_nil(find_line(modified_lines, "new file"), "Untracked content should be present in the review buffer")
+    assert.is_true(find_line(modified_lines, "TWO") < find_line(modified_lines, "new file"), "Files should be rendered sequentially in one review buffer")
   end)
 
   it("applies syntax highlights for each reviewed file", function()
@@ -240,11 +275,8 @@ describe("CodeDiff review view", function()
     assert.is_true(session.compact_mode, "Review mode should honor diff.compact")
     assert.equal("expr", vim.wo[session.modified_win].foldmethod, "Review window should use compact folds")
     assert.equal(0, vim.api.nvim_win_call(session.modified_win, function()
-      return vim.fn.foldlevel(section.modified_header_start)
-    end), "Review file header should remain visible in compact mode")
-    assert.equal(1, vim.api.nvim_win_call(session.modified_win, function()
       return vim.fn.foldlevel(section.modified_content_start)
-    end), "Unchanged content away from hunks should be folded in compact mode")
+    end), "First content line should remain visible so the virtual file header is visible in compact mode")
     assert.equal(0, vim.api.nvim_win_call(session.modified_win, function()
       return vim.fn.foldlevel(changed_line)
     end), "Changed content should remain visible in compact mode")
@@ -290,6 +322,32 @@ describe("CodeDiff review view", function()
     assert.are.same({ "second edited" }, vim.fn.readfile(repo.path("second.txt")))
   end)
 
+  it("assigns o and O insertions at file edges to the selected review section", function()
+    create_repo_with_changes()
+
+    vim.cmd("CodeDiff review")
+    local _, session = wait_for_review()
+    local modified_buf = session.modified_bufnr
+    vim.api.nvim_set_current_win(session.modified_win)
+
+    local modified_lines = vim.api.nvim_buf_get_lines(modified_buf, 0, -1, false)
+    local first_last_line = find_line(modified_lines, "TWO")
+    assert.is_not_nil(first_last_line, "First file content should be in the modified review buffer")
+    vim.api.nvim_win_set_cursor(session.modified_win, { first_last_line, 0 })
+    feedkeys("oafter first<Esc>")
+
+    modified_lines = vim.api.nvim_buf_get_lines(modified_buf, 0, -1, false)
+    local second_first_line = find_line(modified_lines, "new file")
+    assert.is_not_nil(second_first_line, "Second file content should be in the modified review buffer")
+    vim.api.nvim_win_set_cursor(session.modified_win, { second_first_line, 0 })
+    feedkeys("Obefore second<Esc>")
+
+    write_buffer(modified_buf)
+
+    assert.are.same({ "one", "TWO", "after first" }, vim.fn.readfile(repo.path("first.txt")))
+    assert.are.same({ "before second", "new file" }, vim.fn.readfile(repo.path("second.txt")))
+  end)
+
   it("writes a staged added review section back to the working tree file", function()
     repo = h.create_temp_git_repo()
     repo.write_file("README.md", { "root" })
@@ -303,10 +361,10 @@ describe("CodeDiff review view", function()
     local _, session = wait_for_review()
     local modified_buf = session.modified_bufnr
     local modified_lines = vim.api.nvim_buf_get_lines(modified_buf, 0, -1, false)
-    local header_line = find_line(modified_lines, "+++ HELLO.md [staged:A]")
     local content_line = find_line(modified_lines, "hey")
 
-    assert.is_not_nil(header_line, "Staged added file header should be present")
+    assert.is_nil(find_line(modified_lines, "+++ HELLO.md [staged:A]"), "Staged added file header should be virtual")
+    assert.is_true(has_virtual_header(modified_buf, "+++ HELLO.md [staged:A]"), "Staged added file header should be present")
     assert.is_not_nil(content_line, "Staged file content should be present")
 
     vim.api.nvim_buf_set_lines(modified_buf, content_line - 1, content_line + 1, false, { "hello edited", "from review" })

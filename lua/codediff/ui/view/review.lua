@@ -16,7 +16,6 @@ local welcome_window = require("codediff.ui.view.welcome_window")
 local HEADER_WIDTH = 80
 local ns_review = vim.api.nvim_create_namespace("codediff-review")
 local ns_review_syntax = vim.api.nvim_create_namespace("codediff-review-syntax")
-local ns_review_ranges = vim.api.nvim_create_namespace("codediff-review-ranges")
 local TREESITTER_PRIORITY = (vim.hl and vim.hl.priorities and vim.hl.priorities.treesitter) or 100
 local REVIEW_SYNTAX_PRIORITY = TREESITTER_PRIORITY + 1
 
@@ -313,17 +312,29 @@ local function treesitter_language_for_path(path)
   return filetype
 end
 
-local function header_lines(file, side, first)
+local function header_virtual_lines(file, side, first)
   local prefix = side == "original" and "---" or "+++"
   local label = string.format("[%s:%s]", file.group or "unstaged", file.status or "?")
   local lines = {}
   if not first then
-    table.insert(lines, "")
+    table.insert(lines, { { "", "Normal" } })
   end
-  table.insert(lines, string.rep("=", HEADER_WIDTH))
-  table.insert(lines, string.format("%s %s %s", prefix, side_path(file, side), label))
-  table.insert(lines, string.rep("-", HEADER_WIDTH))
+  table.insert(lines, { { string.rep("=", HEADER_WIDTH), "Title" } })
+  table.insert(lines, { { string.format("%s %s %s", prefix, side_path(file, side), label), "Comment" } })
+  table.insert(lines, { { string.rep("-", HEADER_WIDTH), "Title" } })
   return lines
+end
+
+local function header_anchor(line_count_before, content_start, content_count)
+  if content_count > 0 then
+    return content_start, true
+  end
+
+  if line_count_before > 0 then
+    return line_count_before, false
+  end
+
+  return 1, true
 end
 
 local function shift_range(range, offset)
@@ -362,20 +373,19 @@ local function shift_move(move, original_offset, modified_offset)
   }
 end
 
-local function highlight_headers(bufnr, sections, side)
+local function render_headers(bufnr, sections, side)
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
   for _, section in ipairs(sections) do
     local start_line = side == "original" and section.original_header_start or section.modified_header_start
-    local content_start = side == "original" and section.original_content_start or section.modified_content_start
-    for line = start_line, content_start - 1 do
-      local group = line == start_line and "Comment" or "Title"
-      pcall(vim.api.nvim_buf_set_extmark, bufnr, ns_review, line - 1, 0, {
-        end_line = line,
-        end_col = 0,
-        hl_group = group,
-        hl_eol = true,
-        priority = config.options.diff.highlight_priority,
-      })
-    end
+    local above = side == "original" and section.original_header_above or section.modified_header_above
+    local virt_lines = side == "original" and section.original_header_lines or section.modified_header_lines
+    local row = math.max(math.min((start_line or 1) - 1, line_count - 1), 0)
+    pcall(vim.api.nvim_buf_set_extmark, bufnr, ns_review, row, 0, {
+      virt_lines = virt_lines,
+      virt_lines_above = above ~= false,
+      virt_lines_leftcol = true,
+      priority = config.options.diff.highlight_priority,
+    })
   end
 end
 
@@ -445,16 +455,15 @@ local function build_review(results)
 
   for index, result in ipairs(results) do
     local first = index == 1
-    local left_header = header_lines(result.file, "original", first)
-    local right_header = header_lines(result.file, "modified", first)
-    local original_header_start = #original_lines + 1
-    local modified_header_start = #modified_lines + 1
-
-    append_lines(original_lines, left_header)
-    append_lines(modified_lines, right_header)
-
     local original_offset = #original_lines
     local modified_offset = #modified_lines
+    local original_content_count = #(result.original_lines or {})
+    local modified_content_count = #(result.modified_lines or {})
+    local original_content_start = original_offset + 1
+    local modified_content_start = modified_offset + 1
+    local original_header_start, original_header_above = header_anchor(original_offset, original_content_start, original_content_count)
+    local modified_header_start, modified_header_above = header_anchor(modified_offset, modified_content_start, modified_content_count)
+
     append_lines(original_lines, result.original_lines)
     append_lines(modified_lines, result.modified_lines)
 
@@ -469,15 +478,19 @@ local function build_review(results)
       modified_edit_path = result.modified_edit_path,
       original_header_start = original_header_start,
       modified_header_start = modified_header_start,
-      original_content_start = original_offset + 1,
-      modified_content_start = modified_offset + 1,
-      original_content_end = original_offset + #(result.original_lines or {}) + 1,
-      modified_content_end = modified_offset + #(result.modified_lines or {}) + 1,
+      original_header_above = original_header_above,
+      modified_header_above = modified_header_above,
+      original_header_lines = header_virtual_lines(result.file, "original", first),
+      modified_header_lines = header_virtual_lines(result.file, "modified", first),
+      original_content_start = original_content_start,
+      modified_content_start = modified_content_start,
+      original_content_end = original_content_start + original_content_count,
+      modified_content_end = modified_content_start + modified_content_count,
     })
 
     table.insert(syntax_sections, {
-      original_content_start = original_offset + 1,
-      modified_content_start = modified_offset + 1,
+      original_content_start = original_content_start,
+      modified_content_start = modified_content_start,
       original_lines = result.original_lines or {},
       modified_lines = result.modified_lines or {},
       original_language = treesitter_language_for_path(side_path(result.file, "original")),
@@ -499,10 +512,8 @@ local function build_review(results)
 end
 
 local function setup_edit_ranges(bufnr, sections, side)
-  vim.api.nvim_buf_clear_namespace(bufnr, ns_review_ranges, 0, -1)
-
   local entries = {}
-  for _, section in ipairs(sections) do
+  for index, section in ipairs(sections) do
     local edit_path = side == "original" and section.original_edit_path or section.modified_edit_path
     if edit_path then
       local start_line = side == "original" and section.original_content_start or section.modified_content_start
@@ -515,17 +526,12 @@ local function setup_edit_ranges(bufnr, sections, side)
       local start_row = math.max(math.min(start_line - 1, line_count - 1), 0)
       local end_row = math.max(math.min(end_line - 1, line_count), start_row)
 
-      local mark_id = vim.api.nvim_buf_set_extmark(bufnr, ns_review_ranges, start_row, 0, {
-        end_row = end_row,
-        end_col = 0,
-        right_gravity = false,
-        end_right_gravity = true,
-      })
-
       table.insert(entries, {
         path = edit_path,
         path_label = section.path,
-        mark_id = mark_id,
+        section_index = index,
+        start_row = start_row,
+        end_row = end_row,
         initial_lines = vim.api.nvim_buf_get_lines(bufnr, start_row, end_row, false),
       })
     end
@@ -533,6 +539,148 @@ local function setup_edit_ranges(bufnr, sections, side)
   end
 
   return entries
+end
+
+local function edit_range(_bufnr, entry)
+  if not entry or not entry.start_row or not entry.end_row then
+    return nil
+  end
+
+  return entry.start_row, entry.end_row
+end
+
+local function set_edit_range(bufnr, entry, start_row, end_row)
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  entry.start_row = math.max(math.min(start_row, line_count), 0)
+  entry.end_row = math.max(math.min(end_row, line_count), entry.start_row)
+end
+
+local function find_entry_at_row(bufnr, entries, row)
+  for index, entry in ipairs(entries or {}) do
+    local start_row, end_row = edit_range(bufnr, entry)
+    if start_row and row >= start_row and row < end_row then
+      return entry, index, start_row, end_row
+    end
+  end
+  return nil
+end
+
+local function find_entry_ending_at(bufnr, entries, row, skip_entry)
+  for _, entry in ipairs(entries or {}) do
+    if entry ~= skip_entry then
+      local start_row, end_row = edit_range(bufnr, entry)
+      if start_row and end_row == row then
+        return entry, start_row, end_row
+      end
+    end
+  end
+  return nil
+end
+
+local function find_entry_starting_at(bufnr, entries, row, skip_entry)
+  for _, entry in ipairs(entries or {}) do
+    if entry ~= skip_entry then
+      local start_row, end_row = edit_range(bufnr, entry)
+      if start_row == row then
+        return entry, start_row, end_row
+      end
+    end
+  end
+  return nil
+end
+
+local function leading_whitespace(line)
+  return line:match("^%s*") or ""
+end
+
+local function insert_review_line(tabpage, bufnr, command)
+  local session = lifecycle.get_session(tabpage)
+  local entries = session and session.review_write_sections and session.review_write_sections[bufnr] or {}
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local row = cursor[1] - 1
+  local entry, _, start_row, end_row = find_entry_at_row(bufnr, entries, row)
+
+  if not entry then
+    vim.notify("CodeDiff review section is not writable", vim.log.levels.WARN)
+    return
+  end
+
+  local insert_row = command == "O" and row or row + 1
+  local previous_entry, previous_start = find_entry_ending_at(bufnr, entries, insert_row, entry)
+  local next_entry, _, next_end = find_entry_starting_at(bufnr, entries, insert_row, entry)
+  local current_line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
+  local line = leading_whitespace(current_line)
+
+  vim.api.nvim_buf_set_lines(bufnr, insert_row, insert_row, false, { line })
+  set_edit_range(bufnr, entry, start_row, end_row + 1)
+
+  if command == "O" and previous_entry and previous_start then
+    set_edit_range(bufnr, previous_entry, previous_start, insert_row)
+  end
+
+  if command == "o" and next_entry and next_end then
+    set_edit_range(bufnr, next_entry, insert_row + 1, next_end + 1)
+  end
+
+  vim.api.nvim_win_set_cursor(0, { insert_row + 1, #line })
+  vim.cmd("startinsert!")
+end
+
+local function setup_boundary_insert_keymaps(tabpage, bufnr)
+  for _, key in ipairs({ "o", "O" }) do
+    vim.keymap.set("n", key, function()
+      insert_review_line(tabpage, bufnr, key)
+    end, {
+      buffer = bufnr,
+      desc = "Insert inside review file section",
+      silent = true,
+    })
+  end
+end
+
+local function apply_line_change_to_entry(entry, firstline, lastline, new_lastline)
+  local start_row = entry.start_row
+  local end_row = entry.end_row
+  if not start_row or not end_row then
+    return
+  end
+
+  local delta = new_lastline - lastline
+  local is_insertion = firstline == lastline and delta > 0
+
+  if lastline <= start_row then
+    entry.start_row = start_row + delta
+    entry.end_row = end_row + delta
+    return
+  end
+
+  if firstline >= end_row then
+    if is_insertion and firstline == end_row then
+      entry.end_row = end_row + delta
+    end
+    return
+  end
+
+  if firstline < start_row then
+    entry.start_row = firstline
+  end
+  entry.end_row = math.max(entry.start_row, end_row + delta)
+end
+
+local function setup_edit_range_tracking(tabpage, bufnr)
+  vim.api.nvim_buf_attach(bufnr, false, {
+    on_lines = function(_, changed_bufnr, _, firstline, lastline, new_lastline)
+      local session = lifecycle.get_session(tabpage)
+      local entries = session and session.review_write_sections and session.review_write_sections[changed_bufnr]
+      if not entries then
+        return
+      end
+
+      for _, entry in ipairs(entries) do
+        apply_line_change_to_entry(entry, firstline, lastline, new_lastline)
+      end
+    end,
+  })
 end
 
 local function bufnr_for_path(path)
@@ -595,11 +743,8 @@ local function write_review_buffer(tabpage, bufnr)
   local errors = {}
 
   for _, entry in ipairs(entries) do
-    local mark = vim.api.nvim_buf_get_extmark_by_id(bufnr, ns_review_ranges, entry.mark_id, { details = true })
-    if mark and mark[1] then
-      local details = mark[3] or {}
-      local start_row = mark[1]
-      local end_row = details.end_row or start_row
+    local start_row, end_row = edit_range(bufnr, entry)
+    if start_row then
       local lines = vim.api.nvim_buf_get_lines(bufnr, start_row, end_row, false)
       local last_lines = entry.last_written_lines or entry.initial_lines
 
@@ -671,8 +816,8 @@ local function render_review(tabpage, original_buf, modified_buf, original_win, 
   vim.api.nvim_buf_clear_namespace(modified_buf, ns_review, 0, -1)
 
   core.render_diff(original_buf, modified_buf, original_lines, modified_lines, combined_diff)
-  highlight_headers(original_buf, sections, "original")
-  highlight_headers(modified_buf, sections, "modified")
+  render_headers(original_buf, sections, "original")
+  render_headers(modified_buf, sections, "modified")
   apply_syntax_highlights(original_buf, syntax_sections, "original")
   apply_syntax_highlights(modified_buf, syntax_sections, "modified")
 
@@ -687,6 +832,7 @@ local function render_review(tabpage, original_buf, modified_buf, original_win, 
       [original_buf] = setup_edit_ranges(original_buf, sections, "original"),
       [modified_buf] = setup_edit_ranges(modified_buf, sections, "modified"),
     }
+    setup_edit_range_tracking(tabpage, modified_buf)
   end
 
   local orig_cursor = { 1, 0 }
@@ -764,6 +910,7 @@ function M.create(session_config, _filetype, on_ready)
   )
 
   setup_writeback(tabpage, modified_buf)
+  setup_boundary_insert_keymaps(tabpage, modified_buf)
 
   local status_result = session_config.review_data and session_config.review_data.status_result or { unstaged = {}, staged = {}, conflicts = {} }
   local files = flatten_status_files(status_result)

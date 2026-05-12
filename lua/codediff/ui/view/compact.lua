@@ -55,10 +55,11 @@ local function add_review_header_lines(visible, session, side)
   for _, section in ipairs(session.review_sections or {}) do
     local header_start = section[header_key]
     local content_start = section[content_key]
-    if header_start and content_start then
-      for line = header_start, content_start - 1 do
-        visible[line] = true
-      end
+    if header_start then
+      visible[header_start] = true
+    end
+    if content_start then
+      visible[content_start] = true
     end
   end
 end
