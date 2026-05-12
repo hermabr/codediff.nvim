@@ -26,23 +26,28 @@ local function append_lines(target, lines)
   end
 end
 
-local function create_review_buffer(name)
+local function create_review_buffer(name, opts)
+  opts = opts or {}
+  local editable = opts.editable ~= false
   local bufnr = vim.api.nvim_create_buf(false, true)
   vim.bo[bufnr].buftype = "nofile"
   vim.bo[bufnr].bufhidden = "wipe"
   vim.bo[bufnr].swapfile = false
   vim.bo[bufnr].filetype = "codediff-review"
-  vim.bo[bufnr].readonly = false
-  vim.bo[bufnr].modifiable = true
+  vim.bo[bufnr].readonly = not editable
+  vim.bo[bufnr].modifiable = editable
   pcall(vim.api.nvim_buf_set_name, bufnr, name)
   return bufnr
 end
 
 local function set_buffer_lines(bufnr, lines)
   local was_modifiable = vim.bo[bufnr].modifiable
+  local was_readonly = vim.bo[bufnr].readonly
+  vim.bo[bufnr].readonly = false
   vim.bo[bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, #lines > 0 and lines or { "" })
   vim.bo[bufnr].modifiable = was_modifiable
+  vim.bo[bufnr].readonly = was_readonly
   vim.bo[bufnr].modified = false
 end
 
@@ -683,8 +688,8 @@ function M.create(session_config, _filetype, on_ready)
   vim.cmd(split_cmd)
   local modified_win = vim.api.nvim_get_current_win()
 
-  local original_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].original")
-  local modified_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].modified")
+  local original_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].original", { editable = false })
+  local modified_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].modified", { editable = true })
   vim.api.nvim_win_set_buf(original_win, original_buf)
   vim.api.nvim_win_set_buf(modified_win, modified_buf)
   welcome_window.sync(original_win)
