@@ -53,9 +53,11 @@ local function build_sections(keymaps, is_explorer, is_history, is_review, is_co
     table.insert(view_items, { km.next_file, "Next file" })
     table.insert(view_items, { km.prev_file, "Previous file" })
   end
-  if is_explorer then
+  if is_explorer or is_review then
     table.insert(view_items, { km.toggle_explorer, "Toggle explorer" })
     table.insert(view_items, { km.focus_explorer, "Focus explorer" })
+  end
+  if is_explorer then
     table.insert(view_items, { km.toggle_stage, "Stage/unstage current file" })
     table.insert(view_items, { km.stage_hunk, "Stage hunk under cursor" })
     table.insert(view_items, { km.unstage_hunk, "Unstage hunk under cursor" })
@@ -70,7 +72,7 @@ local function build_sections(keymaps, is_explorer, is_history, is_review, is_co
   table.insert(sections, section("VIEW", view_items))
 
   -- Explorer section
-  if is_explorer then
+  if is_explorer or is_review then
     local ekm = keymaps.explorer
     table.insert(
       sections,

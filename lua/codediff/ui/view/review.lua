@@ -11,6 +11,7 @@ local lifecycle = require("codediff.ui.lifecycle")
 local layout = require("codediff.ui.layout")
 local render = require("codediff.ui.view.render")
 local view_keymaps = require("codediff.ui.view.keymaps")
+local review_sections = require("codediff.ui.view.review_sections")
 local welcome_window = require("codediff.ui.view.welcome_window")
 
 local HEADER_WIDTH = 80
@@ -1030,6 +1031,107 @@ local function setup_windows(original_win, modified_win)
   end
 end
 
+local function review_sync_group_name(tabpage)
+  return "CodeDiffReviewExplorerSync_" .. tabpage
+end
+
+local function clear_review_explorer_sync(tabpage)
+  pcall(vim.api.nvim_del_augroup_by_name, review_sync_group_name(tabpage))
+end
+
+local function event_changed_win(event, win)
+  if not event or not win then
+    return false
+  end
+
+  local entry = event[tostring(win)]
+  return entry and ((entry.topline or 0) ~= 0 or (entry.topfill or 0) ~= 0 or (entry.height or 0) ~= 0)
+end
+
+local function update_explorer_from_review_cursor(tabpage, win)
+  local session = lifecycle.get_session(tabpage)
+  if not session or session.mode ~= "review" or not win or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+
+  local _, section = review_sections.section_at_cursor(session, win)
+  local explorer = session.explorer
+  if section and explorer and explorer.set_current_selection then
+    local changed = explorer.current_file_path ~= section.path or explorer.current_file_group ~= section.group
+    explorer.set_current_selection(review_sections.file_data(section), { reveal = changed })
+  end
+end
+
+local function setup_review_explorer_sync(tabpage)
+  clear_review_explorer_sync(tabpage)
+
+  local session = lifecycle.get_session(tabpage)
+  if not session or session.mode ~= "review" then
+    return
+  end
+
+  local group = vim.api.nvim_create_augroup(review_sync_group_name(tabpage), { clear = true })
+
+  vim.api.nvim_create_autocmd("WinScrolled", {
+    group = group,
+    callback = function()
+      local current = lifecycle.get_session(tabpage)
+      if not current or current.mode ~= "review" then
+        return
+      end
+
+      local event = vim.v.event or {}
+      local current_win = vim.api.nvim_get_current_win()
+      local target_win = nil
+      if current_win == current.original_win and event_changed_win(event, current.original_win) then
+        target_win = current.original_win
+      elseif current_win == current.modified_win and event_changed_win(event, current.modified_win) then
+        target_win = current.modified_win
+      elseif event_changed_win(event, current.modified_win) then
+        target_win = current.modified_win
+      elseif event_changed_win(event, current.original_win) then
+        target_win = current.original_win
+      end
+
+      if target_win then
+        update_explorer_from_review_cursor(tabpage, target_win)
+      end
+    end,
+  })
+
+  local function update_from_current_win()
+    local current = lifecycle.get_session(tabpage)
+    if not current or current.mode ~= "review" then
+      return
+    end
+
+    local win = vim.api.nvim_get_current_win()
+    if win == current.original_win or win == current.modified_win then
+      update_explorer_from_review_cursor(tabpage, win)
+    end
+  end
+
+  for _, bufnr in ipairs({ session.original_bufnr, session.modified_bufnr }) do
+    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+      vim.api.nvim_create_autocmd({ "BufEnter", "CursorMoved", "CursorMovedI" }, {
+        group = group,
+        buffer = bufnr,
+        callback = update_from_current_win,
+      })
+    end
+  end
+
+  vim.api.nvim_create_autocmd("TabClosed", {
+    group = group,
+    pattern = tostring(tabpage),
+    callback = function()
+      clear_review_explorer_sync(tabpage)
+    end,
+  })
+
+  update_explorer_from_review_cursor(tabpage, session.modified_win)
+end
+
 local function render_review(tabpage, original_buf, modified_buf, original_win, modified_win, results, errors, on_ready)
   local original_lines, modified_lines, combined_diff, sections, syntax_sections = build_review(results)
 
@@ -1086,6 +1188,7 @@ local function render_review(tabpage, original_buf, modified_buf, original_win, 
   require("codediff.ui.auto_refresh").enable(modified_buf)
   vim.bo[original_buf].modified = false
   vim.bo[modified_buf].modified = false
+  setup_review_explorer_sync(tabpage)
 
   if #errors > 0 then
     vim.notify(string.format("CodeDiff review skipped %d file content load(s)", #errors), vim.log.levels.WARN)
@@ -1162,6 +1265,7 @@ function M.refresh(tabpage)
 
   vim.bo[original_buf].modified = false
   vim.bo[modified_buf].modified = false
+  update_explorer_from_review_cursor(tabpage, modified_win)
 
   return true
 end
@@ -1281,7 +1385,7 @@ local function show_explorer_panel(explorer)
   explorer.is_hidden = false
 end
 
-local function setup_hidden_explorer(tabpage, session_config)
+local function setup_review_explorer(tabpage, session_config)
   if not (session_config.explorer_data and session_config.explorer_data.status_result and session_config.git_root) then
     return nil
   end
@@ -1300,7 +1404,6 @@ local function setup_hidden_explorer(tabpage, session_config)
     explorer_opts
   )
 
-  hide_explorer_panel(explorer)
   lifecycle.set_explorer(tabpage, explorer)
   return explorer
 end
@@ -1351,7 +1454,7 @@ function M.show(tabpage, on_ready)
     return false
   end
 
-  hide_explorer_panel(explorer)
+  show_explorer_panel(explorer)
 
   local original_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].original", { editable = false })
   local modified_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].modified", { editable = true })
@@ -1430,6 +1533,7 @@ function M.hide(tabpage)
   if not session or session.mode ~= "review" then
     return false
   end
+  clear_review_explorer_sync(tabpage)
 
   local explorer = session.explorer
   if not explorer then
@@ -1526,7 +1630,7 @@ function M.hide(tabpage)
   view_keymaps.setup_all_keymaps(tabpage, original_buf, modified_buf, true)
   layout.arrange(tabpage)
 
-  local selection = return_state.selection or explorer.current_selection
+  local selection = explorer.current_selection or return_state.selection
   if selection and explorer.on_file_select then
     explorer.on_file_select(vim.deepcopy(selection), { force = true, no_jump = true })
   else
@@ -1605,7 +1709,7 @@ function M.create(session_config, _filetype, on_ready)
       end
     end
   )
-  local explorer = setup_hidden_explorer(tabpage, session_config)
+  local explorer = setup_review_explorer(tabpage, session_config)
   local session = lifecycle.get_session(tabpage)
   if session then
     session.review_return = {

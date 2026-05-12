@@ -26,7 +26,7 @@ https://github.com/user-attachments/assets/64c41f01-dffe-4318-bce4-16eec8de356e
 - **Side-by-side diff view** in a new tab with synchronized scrolling
 - **Inline (unified) diff view** — single-window layout with deleted lines as virtual overlays, with treesitter syntax highlighting
 - **Toggle layout** — switch per-file diffs between side-by-side and inline layout at runtime with `t`
-- **Review mode** — start with an all-files side-by-side review and toggle to explorer with `gr`
+- **Review mode** — all-files side-by-side review with a changed-file overview and `gr` per-file explorer toggle
 - **Git integration**: Compare between any git revision (HEAD, commits, branches, tags)
 - **Same implementation as VSCode's diff engine**, providing identical visual highlighting for most scenarios
 - **Fast C-based diff computation** using FFI with **multi-core parallelization** (OpenMP)
@@ -141,8 +141,8 @@ https://github.com/user-attachments/assets/64c41f01-dffe-4318-bce4-16eec8de356e
     keymaps = {
       view = {
         quit = "q",                    -- Close diff tab
-        toggle_explorer = "<leader>b",  -- Toggle explorer visibility (explorer mode only)
-        focus_explorer = "<leader>e",   -- Focus explorer panel (explorer mode only)
+        toggle_explorer = "<leader>b",  -- Toggle explorer visibility (explorer/review mode)
+        focus_explorer = "<leader>e",   -- Focus explorer panel (explorer/review mode)
         next_hunk = "]c",   -- Jump to next change
         prev_hunk = "[c",   -- Jump to previous change
         next_file = "]f",   -- Next file in explorer/history/review mode
@@ -313,7 +313,7 @@ Open one continuous side-by-side review of all changed files:
 :CodeDiff main --side-by-side
 ```
 
-Press `gr` in review mode to switch to the file explorer for per-file diffs. Press `gr` again to return to the all-files review.
+Review mode keeps the changed-file explorer visible as an overview. Select a file in the explorer, or use `]f` / `[f`, to jump within the all-files review; the explorer highlights the file under the review cursor. Press `gr` to switch to per-file explorer diffs, and `gr` again to return to the all-files review.
 
 ### File Explorer Mode
 

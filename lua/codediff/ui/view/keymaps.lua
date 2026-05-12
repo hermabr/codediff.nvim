@@ -35,7 +35,7 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
     end
   end
 
-  -- Helper: Toggle explorer visibility (explorer mode only)
+  -- Helper: Toggle explorer visibility
   local function toggle_explorer()
     local explorer_obj = lifecycle.get_explorer(tabpage)
     if not explorer_obj then
@@ -46,7 +46,7 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
     explorer.toggle_visibility(explorer_obj)
   end
 
-  -- Helper: Focus explorer panel (explorer mode only)
+  -- Helper: Focus explorer panel
   local function focus_explorer()
     local explorer_obj = lifecycle.get_explorer(tabpage)
     if not explorer_obj then
@@ -567,11 +567,11 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
     lifecycle.set_tab_keymap(tabpage, "n", keymaps.prev_hunk, navigation.prev_hunk, { desc = "Previous hunk" })
   end
 
-  -- Explorer toggle (e) - only in explorer mode
-  if is_explorer_mode and keymaps.toggle_explorer then
+  -- Explorer toggle/focus (e) - available anywhere the explorer panel exists
+  if (is_explorer_mode or is_review_mode) and keymaps.toggle_explorer then
     lifecycle.set_tab_keymap(tabpage, "n", keymaps.toggle_explorer, toggle_explorer, { desc = "Toggle explorer visibility" })
   end
-  if is_explorer_mode and keymaps.focus_explorer then
+  if (is_explorer_mode or is_review_mode) and keymaps.focus_explorer then
     lifecycle.set_tab_keymap(tabpage, "n", keymaps.focus_explorer, focus_explorer, { desc = "Focus explorer panel" })
   end
 

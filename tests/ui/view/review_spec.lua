@@ -399,8 +399,8 @@ describe("CodeDiff review view", function()
     local modified_lines = vim.api.nvim_buf_get_lines(session.modified_bufnr, 0, -1, false)
 
     assert.is_not_nil(session.explorer, "Review mode should keep the explorer session for toggling back")
-    assert.is_true(session.explorer.is_hidden, "Review mode should hide the explorer panel")
-    assert.equal(2, #vim.api.nvim_tabpage_list_wins(tabpage), "Review mode should only create the two diff windows")
+    assert.is_false(session.explorer.is_hidden, "Review mode should show the explorer overview")
+    assert.equal(3, #vim.api.nvim_tabpage_list_wins(tabpage), "Review mode should create the explorer overview plus two diff windows")
     assert.equal(2, #session.review_sections, "Review should include both changed files")
 
     assert.is_nil(find_line(modified_lines, "+++ first.txt [unstaged:M]"), "Modified file headers should be virtual")
@@ -565,7 +565,7 @@ describe("CodeDiff review view", function()
   end)
 
   it("navigates between file sections in review mode", function()
-    create_repo_with_changes()
+    create_repo_with_compact_scroll_drift()
 
     local _, session = open_review()
     vim.api.nvim_set_current_win(session.modified_win)
@@ -576,6 +576,50 @@ describe("CodeDiff review view", function()
 
     assert.is_true(navigation.prev_file(), "prev_file should jump to the previous review section")
     assert.equal(session.review_sections[1].modified_header_start, vim.api.nvim_win_get_cursor(session.modified_win)[1])
+  end)
+
+  it("uses the explorer overview to jump within review mode", function()
+    create_repo_with_compact_scroll_drift()
+
+    local _, session = open_review()
+    local explorer = session.explorer
+    local second = session.review_sections[2]
+
+    explorer.on_file_select({
+      path = second.path,
+      old_path = second.old_path,
+      status = second.status,
+      group = second.group,
+    })
+
+    assert.equal("review", lifecycle.get_session(vim.api.nvim_get_current_tabpage()).mode)
+    assert.equal(second.modified_content_start, vim.api.nvim_win_call(session.modified_win, function()
+      return vim.fn.winsaveview().topline
+    end))
+    assert.equal(second.path, explorer.current_file_path)
+    assert.equal(second.group, explorer.current_file_group)
+  end)
+
+  it("highlights the review file under the cursor", function()
+    create_repo_with_changes()
+
+    local _, session = open_review()
+    local first = session.review_sections[1]
+    local second = session.review_sections[2]
+
+    vim.api.nvim_set_current_win(session.modified_win)
+    vim.api.nvim_win_set_cursor(session.modified_win, { first.modified_content_start, 0 })
+    vim.fn.winrestview({ topline = first.modified_content_start, topfill = 0 })
+    vim.cmd("normal! " .. (second.modified_content_start - first.modified_content_start) .. "j")
+
+    local updated = vim.wait(1000, function()
+      return session.explorer.current_file_path == second.path and session.explorer.current_file_group == second.group
+    end, 20)
+
+    assert.equal(first.modified_content_start, vim.api.nvim_win_call(session.modified_win, function()
+      return vim.fn.winsaveview().topline
+    end))
+    assert.is_true(updated, "Explorer highlight should follow the file under the review cursor")
   end)
 
   it("keeps virtual boundaries ordered when an empty side is followed by another file", function()

@@ -10,7 +10,8 @@ details, see README.md.
 QUICK START                                           *codediff-quickstart*
 
 After installing the plugin and running |:CodeDiff|, you can:
-- Review all changed files, then toggle to explorer for per-file diffs
+- Review all changed files with a changed-file overview, then toggle to
+  explorer for per-file diffs
 - Compare the current file with a git revision
 - Compare two files or directories
 
@@ -36,9 +37,11 @@ Review mode (git status by default):
   :CodeDiff main HEAD
 <
 
-Review mode renders all changed files in one continuous side-by-side diff.
-Press `gr` in review mode to switch to explorer mode for per-file diffs. Press
-`gr` again to return to review mode.
+Review mode renders all changed files in one continuous side-by-side diff and
+keeps the changed-file explorer visible as an overview. Select a file in the
+explorer, or use `]f` / `[f`, to jump within the all-files review. The explorer
+highlights the file under the review cursor. Press `gr` to switch to explorer
+mode for per-file diffs, and press `gr` again to return to review mode.
 
 Directory comparisons open explorer mode directly:
 >vim
