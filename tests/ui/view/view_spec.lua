@@ -30,6 +30,12 @@ local function create_test_diff_view(original_lines, modified_lines, left_path, 
   return result, tabpage
 end
 
+local function write_buffer(bufnr)
+  vim.api.nvim_buf_call(bufnr, function()
+    vim.cmd("write")
+  end)
+end
+
 describe("Render View", function()
   before_each(function()
     require("codediff").setup({ diff = { layout = "side-by-side" } })
@@ -421,6 +427,78 @@ describe("Render View", function()
 
       vim.fn.delete(left_path)
       vim.fn.delete(right_path)
+    end
+  end)
+
+  it("Allows editing and writing each real diff buffer", function()
+    local left_path = get_temp_path("test_view_edit_left.txt")
+    local right_path = get_temp_path("test_view_edit_right.txt")
+    vim.fn.writefile({"left original"}, left_path)
+    vim.fn.writefile({"right original"}, right_path)
+
+    local result = create_test_diff_view({"left original"}, {"right original"}, left_path, right_path)
+    vim.cmd("redraw")
+    vim.wait(200)
+
+    assert.is_true(vim.bo[result.original_buf].modifiable, "Original real file buffer should be editable")
+    assert.is_true(vim.bo[result.modified_buf].modifiable, "Modified real file buffer should be editable")
+
+    vim.api.nvim_buf_set_lines(result.original_buf, 0, -1, false, {"left edited"})
+    vim.api.nvim_buf_set_lines(result.modified_buf, 0, -1, false, {"right edited"})
+
+    write_buffer(result.original_buf)
+    write_buffer(result.modified_buf)
+
+    assert.are.same({"left edited"}, vim.fn.readfile(left_path))
+    assert.are.same({"right edited"}, vim.fn.readfile(right_path))
+
+    vim.fn.delete(left_path)
+    vim.fn.delete(right_path)
+  end)
+
+  it("Resolves repo-relative real paths against git_root for editing", function()
+    local root = vim.fn.tempname()
+    local old_cwd = vim.fn.getcwd()
+
+    vim.fn.mkdir(root .. "/sub", "p")
+    vim.fn.writefile({"left root"}, root .. "/left.txt")
+    vim.fn.writefile({"right nested"}, root .. "/sub/right.txt")
+
+    local ok, err = pcall(function()
+      vim.fn.chdir(root .. "/sub")
+
+      local result = view.create({
+        mode = "standalone",
+        git_root = root,
+        original_path = "left.txt",
+        modified_path = "sub/right.txt",
+        original_revision = nil,
+        modified_revision = nil,
+      })
+
+      vim.cmd("redraw")
+      vim.wait(200)
+
+      local expected_left = vim.fn.resolve(vim.fn.fnamemodify(root .. "/left.txt", ":p"))
+      local expected_right = vim.fn.resolve(vim.fn.fnamemodify(root .. "/sub/right.txt", ":p"))
+      local actual_left = vim.fn.resolve(vim.api.nvim_buf_get_name(result.original_buf))
+      local actual_right = vim.fn.resolve(vim.api.nvim_buf_get_name(result.modified_buf))
+
+      assert.equal(expected_left, actual_left)
+      assert.equal(expected_right, actual_right)
+
+      vim.api.nvim_buf_set_lines(result.modified_buf, 0, -1, false, {"right edited"})
+      write_buffer(result.modified_buf)
+
+      assert.are.same({"right edited"}, vim.fn.readfile(root .. "/sub/right.txt"))
+      assert.equal(0, vim.fn.filereadable(root .. "/sub/sub/right.txt"))
+    end)
+
+    vim.fn.chdir(old_cwd)
+    vim.fn.delete(root, "rf")
+
+    if not ok then
+      error(err)
     end
   end)
 end)

@@ -29,6 +29,12 @@ local function find_line(lines, needle)
   return nil
 end
 
+local function write_buffer(bufnr)
+  vim.api.nvim_buf_call(bufnr, function()
+    vim.cmd("write")
+  end)
+end
+
 local function setup_command()
   pcall(vim.api.nvim_del_user_command, "CodeDiff")
   local commands = require("codediff.commands")
@@ -151,5 +157,55 @@ describe("CodeDiff review view", function()
 
     assert.is_true(navigation.prev_file(), "prev_file should jump to the previous review section")
     assert.equal(session.review_sections[1].modified_header_start, vim.api.nvim_win_get_cursor(session.modified_win)[1])
+  end)
+
+  it("writes edited modified review sections to their backing files", function()
+    create_repo_with_changes()
+    vim.cmd("edit " .. vim.fn.fnameescape(repo.path("first.txt")))
+    local first_buf = vim.api.nvim_get_current_buf()
+
+    vim.cmd("CodeDiff review")
+    local _, session = wait_for_review()
+    local modified_buf = session.modified_bufnr
+    local modified_lines = vim.api.nvim_buf_get_lines(modified_buf, 0, -1, false)
+    local first_line = find_line(modified_lines, "TWO")
+    local second_line = find_line(modified_lines, "new file")
+
+    assert.is_true(vim.bo[modified_buf].modifiable, "Modified review buffer should be editable")
+    assert.is_not_nil(first_line, "First file content should be in the modified review buffer")
+    assert.is_not_nil(second_line, "Second file content should be in the modified review buffer")
+
+    vim.api.nvim_buf_set_lines(modified_buf, second_line - 1, second_line, false, { "second edited" })
+    vim.api.nvim_buf_set_lines(modified_buf, first_line - 1, first_line, false, { "TWO edited", "inserted in first" })
+    write_buffer(modified_buf)
+
+    assert.are.same({ "one", "TWO edited", "inserted in first" }, vim.fn.readfile(repo.path("first.txt")))
+    assert.are.same({ "one", "TWO edited", "inserted in first" }, vim.api.nvim_buf_get_lines(first_buf, 0, -1, false))
+    assert.are.same({ "second edited" }, vim.fn.readfile(repo.path("second.txt")))
+  end)
+
+  it("writes a staged added review section back to the working tree file", function()
+    repo = h.create_temp_git_repo()
+    repo.write_file("README.md", { "root" })
+    repo.git("add README.md")
+    repo.git("commit -m initial")
+    repo.write_file("HELLO.md", { "hey", "# this" })
+    repo.git("add HELLO.md")
+    vim.fn.chdir(repo.dir)
+
+    vim.cmd("CodeDiff review")
+    local _, session = wait_for_review()
+    local modified_buf = session.modified_bufnr
+    local modified_lines = vim.api.nvim_buf_get_lines(modified_buf, 0, -1, false)
+    local header_line = find_line(modified_lines, "+++ HELLO.md [staged:A]")
+    local content_line = find_line(modified_lines, "hey")
+
+    assert.is_not_nil(header_line, "Staged added file header should be present")
+    assert.is_not_nil(content_line, "Staged file content should be present")
+
+    vim.api.nvim_buf_set_lines(modified_buf, content_line - 1, content_line + 1, false, { "hello edited", "from review" })
+    write_buffer(modified_buf)
+
+    assert.are.same({ "hello edited", "from review" }, vim.fn.readfile(repo.path("HELLO.md")))
   end)
 end)

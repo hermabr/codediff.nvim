@@ -15,6 +15,7 @@ local welcome_window = require("codediff.ui.view.welcome_window")
 local HEADER_WIDTH = 80
 local ns_review = vim.api.nvim_create_namespace("codediff-review")
 local ns_review_syntax = vim.api.nvim_create_namespace("codediff-review-syntax")
+local ns_review_ranges = vim.api.nvim_create_namespace("codediff-review-ranges")
 local REVIEW_SYNTAX_PRIORITY = ((vim.hl and vim.hl.priorities and vim.hl.priorities.treesitter) or 100) + 1
 
 local function append_lines(target, lines)
@@ -23,21 +24,45 @@ local function append_lines(target, lines)
   end
 end
 
-local function create_review_buffer(name)
+local function same_lines(left, right)
+  if #left ~= #right then
+    return false
+  end
+
+  for index, line in ipairs(left) do
+    if right[index] ~= line then
+      return false
+    end
+  end
+
+  return true
+end
+
+local function copy_lines(lines)
+  return vim.deepcopy(lines or {})
+end
+
+local function create_review_buffer(name, editable)
   local bufnr = vim.api.nvim_create_buf(false, true)
-  vim.bo[bufnr].buftype = "nofile"
+  vim.bo[bufnr].buftype = editable and "acwrite" or "nofile"
   vim.bo[bufnr].bufhidden = "wipe"
   vim.bo[bufnr].swapfile = false
   vim.bo[bufnr].filetype = "codediff-review"
-  vim.bo[bufnr].modifiable = false
+  vim.bo[bufnr].modifiable = editable == true
+  vim.bo[bufnr].readonly = editable ~= true
   pcall(vim.api.nvim_buf_set_name, bufnr, name)
   return bufnr
 end
 
 local function set_buffer_lines(bufnr, lines)
+  local modifiable = vim.bo[bufnr].modifiable
+  local readonly = vim.bo[bufnr].readonly
   vim.bo[bufnr].modifiable = true
+  vim.bo[bufnr].readonly = false
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, #lines > 0 and lines or { "" })
-  vim.bo[bufnr].modifiable = false
+  vim.bo[bufnr].modifiable = modifiable
+  vim.bo[bufnr].readonly = readonly
+  vim.bo[bufnr].modified = false
 end
 
 local function flatten_status_files(status_result)
@@ -60,6 +85,15 @@ end
 
 local function has_staged_entry(status_result, path)
   for _, file in ipairs(status_result.staged or {}) do
+    if file.path == path then
+      return true
+    end
+  end
+  return false
+end
+
+local function has_unstaged_entry(status_result, path)
+  for _, file in ipairs(status_result.unstaged or {}) do
     if file.path == path then
       return true
     end
@@ -137,6 +171,31 @@ local function build_sources(file, context)
   return revision_source(original_revision, git_root, old_path or file_path), real_source(abs_path)
 end
 
+local function editable_path_for_source(source, side, file, context)
+  if side ~= "modified" then
+    return nil
+  end
+
+  if source.kind == "real" then
+    return source.path
+  end
+
+  if
+    source.kind == "revision"
+    and source.revision == ":0"
+    and context
+    and not context.base_revision
+    and not context.target_revision
+    and file.group == "staged"
+    and file.status ~= "D"
+    and not has_unstaged_entry(context.status_result, file.path)
+  then
+    return context.git_root .. "/" .. file.path
+  end
+
+  return nil
+end
+
 local function load_source(source, errors, callback)
   if source.kind == "empty" then
     callback({})
@@ -170,6 +229,10 @@ local function load_file(file, context, errors, callback)
   local original_source, modified_source = build_sources(file, context)
   local result = {
     file = file,
+    original_source = original_source,
+    modified_source = modified_source,
+    original_edit_path = editable_path_for_source(original_source, "original", file, context),
+    modified_edit_path = editable_path_for_source(modified_source, "modified", file, context),
     original_lines = nil,
     modified_lines = nil,
   }
@@ -393,10 +456,16 @@ local function build_review(results)
       old_path = result.file.old_path,
       status = result.file.status,
       group = result.file.group,
+      original_source = result.original_source,
+      modified_source = result.modified_source,
+      original_edit_path = result.original_edit_path,
+      modified_edit_path = result.modified_edit_path,
       original_header_start = original_header_start,
       modified_header_start = modified_header_start,
       original_content_start = original_offset + 1,
       modified_content_start = modified_offset + 1,
+      original_content_end = original_offset + #(result.original_lines or {}) + 1,
+      modified_content_end = modified_offset + #(result.modified_lines or {}) + 1,
     })
 
     table.insert(syntax_sections, {
@@ -420,6 +489,151 @@ local function build_review(results)
   end
 
   return original_lines, modified_lines, combined_diff, sections, syntax_sections
+end
+
+local function setup_edit_ranges(bufnr, sections, side)
+  vim.api.nvim_buf_clear_namespace(bufnr, ns_review_ranges, 0, -1)
+
+  local entries = {}
+  for _, section in ipairs(sections) do
+    local edit_path = side == "original" and section.original_edit_path or section.modified_edit_path
+    if edit_path then
+      local start_line = side == "original" and section.original_content_start or section.modified_content_start
+      local end_line = side == "original" and section.original_content_end or section.modified_content_end
+      if end_line <= start_line then
+        goto continue
+      end
+
+      local line_count = vim.api.nvim_buf_line_count(bufnr)
+      local start_row = math.max(math.min(start_line - 1, line_count - 1), 0)
+      local end_row = math.max(math.min(end_line - 1, line_count), start_row)
+
+      local mark_id = vim.api.nvim_buf_set_extmark(bufnr, ns_review_ranges, start_row, 0, {
+        end_row = end_row,
+        end_col = 0,
+        right_gravity = false,
+        end_right_gravity = true,
+      })
+
+      table.insert(entries, {
+        path = edit_path,
+        path_label = section.path,
+        mark_id = mark_id,
+        initial_lines = vim.api.nvim_buf_get_lines(bufnr, start_row, end_row, false),
+      })
+    end
+    ::continue::
+  end
+
+  return entries
+end
+
+local function bufnr_for_path(path)
+  local resolved = vim.fn.resolve(path)
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buf) then
+      local name = vim.api.nvim_buf_get_name(buf)
+      if name == path or vim.fn.resolve(name) == resolved then
+        return buf
+      end
+    end
+  end
+  return -1
+end
+
+local function write_lines_to_file(path, lines)
+  local normalized_path = vim.fn.fnamemodify(path, ":p")
+  local target_buf = bufnr_for_path(normalized_path)
+
+  if target_buf ~= -1 and vim.api.nvim_buf_is_loaded(target_buf) then
+    if vim.bo[target_buf].modified then
+      return false, "target buffer has unsaved changes"
+    end
+
+    local modifiable = vim.bo[target_buf].modifiable
+    local readonly = vim.bo[target_buf].readonly
+    vim.bo[target_buf].modifiable = true
+    vim.bo[target_buf].readonly = false
+
+    local ok, err = pcall(function()
+      vim.api.nvim_buf_set_lines(target_buf, 0, -1, false, lines)
+      vim.api.nvim_buf_call(target_buf, function()
+        vim.cmd("silent write")
+      end)
+    end)
+
+    vim.bo[target_buf].modifiable = modifiable
+    vim.bo[target_buf].readonly = readonly
+
+    if not ok then
+      return false, tostring(err)
+    end
+    return true
+  end
+
+  local ok, result = pcall(vim.fn.writefile, lines, normalized_path)
+  if not ok then
+    return false, tostring(result)
+  end
+  if result ~= 0 then
+    return false, "writefile returned " .. tostring(result)
+  end
+  return true
+end
+
+local function write_review_buffer(tabpage, bufnr)
+  local session = lifecycle.get_session(tabpage)
+  local entries = session and session.review_write_sections and session.review_write_sections[bufnr] or {}
+  local wrote = 0
+  local errors = {}
+
+  for _, entry in ipairs(entries) do
+    local mark = vim.api.nvim_buf_get_extmark_by_id(bufnr, ns_review_ranges, entry.mark_id, { details = true })
+    if mark and mark[1] then
+      local details = mark[3] or {}
+      local start_row = mark[1]
+      local end_row = details.end_row or start_row
+      local lines = vim.api.nvim_buf_get_lines(bufnr, start_row, end_row, false)
+      local last_lines = entry.last_written_lines or entry.initial_lines
+
+      if not same_lines(lines, last_lines) then
+        local parent = vim.fn.fnamemodify(entry.path, ":h")
+        if parent and parent ~= "" then
+          vim.fn.mkdir(parent, "p")
+        end
+
+        local ok, err = write_lines_to_file(entry.path, lines)
+        if ok then
+          wrote = wrote + 1
+          entry.last_written_lines = copy_lines(lines)
+          entry.initial_lines = copy_lines(lines)
+        else
+          table.insert(errors, string.format("%s: %s", entry.path_label or entry.path, tostring(err)))
+        end
+      end
+    end
+  end
+
+  if #errors > 0 then
+    vim.notify("CodeDiff review write failed:\n" .. table.concat(errors, "\n"), vim.log.levels.ERROR)
+    return
+  end
+
+  vim.bo[bufnr].modified = false
+  if wrote > 0 then
+    vim.notify(string.format("CodeDiff review wrote %d file%s", wrote, wrote == 1 and "" or "s"), vim.log.levels.INFO)
+  end
+end
+
+local function setup_writeback(tabpage, bufnr)
+  local group = vim.api.nvim_create_augroup("CodeDiffReviewWrite_" .. tabpage .. "_" .. bufnr, { clear = true })
+  vim.api.nvim_create_autocmd("BufWriteCmd", {
+    group = group,
+    buffer = bufnr,
+    callback = function(args)
+      write_review_buffer(tabpage, args.buf)
+    end,
+  })
 end
 
 local function setup_windows(original_win, modified_win)
@@ -462,6 +676,10 @@ local function render_review(tabpage, original_buf, modified_buf, original_win, 
   if session then
     session.review_sections = sections
     session.review_errors = errors
+    session.review_write_sections = {
+      [original_buf] = setup_edit_ranges(original_buf, sections, "original"),
+      [modified_buf] = setup_edit_ranges(modified_buf, sections, "modified"),
+    }
   end
 
   local orig_cursor = { 1, 0 }
@@ -500,8 +718,8 @@ function M.create(session_config, _filetype, on_ready)
   vim.cmd(split_cmd)
   local modified_win = vim.api.nvim_get_current_win()
 
-  local original_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].original")
-  local modified_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].modified")
+  local original_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].original", false)
+  local modified_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].modified", true)
   vim.api.nvim_win_set_buf(original_win, original_buf)
   vim.api.nvim_win_set_buf(modified_win, modified_buf)
   welcome_window.sync(original_win)
@@ -535,6 +753,8 @@ function M.create(session_config, _filetype, on_ready)
       end
     end
   )
+
+  setup_writeback(tabpage, modified_buf)
 
   local status_result = session_config.review_data and session_config.review_data.status_result or { unstaged = {}, staged = {}, conflicts = {} }
   local files = flatten_status_files(status_result)

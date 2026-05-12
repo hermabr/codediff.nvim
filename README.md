@@ -364,9 +364,22 @@ Compare the current buffer with a git revision:
 
 **Behavior:**
 - Left buffer: Git version (at specified revision) - readonly
-- Right buffer: Current buffer content - readonly
+- Right buffer: Current working tree content - editable and writes to the file
+- Revision-to-revision comparisons use readonly revision buffers on both sides
 - Opens in a new tab automatically
 - Async operation - won't block Neovim
+
+### Review Mode
+
+Review all changed files in one side-by-side view:
+
+```vim
+:CodeDiff review
+:CodeDiff review main
+:CodeDiff review main HEAD
+```
+
+The modified review buffer is editable for working-tree-backed sections. Writing that buffer saves changed sections back to their corresponding files; revision-only sections remain snapshots. Staged sections without a separate unstaged entry write back to the working tree file.
 
 ### File Comparison Mode
 

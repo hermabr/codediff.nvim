@@ -3,6 +3,24 @@ local M = {}
 
 local virtual_file = require("codediff.core.virtual_file")
 
+local function is_absolute_path(path)
+  return path:match("^/") ~= nil or path:match("^%a:[/\\]") ~= nil or path:match("^\\\\") ~= nil
+end
+
+local function normalize_real_path(path, git_root)
+  if not path or path == "" then
+    return path
+  end
+
+  local expanded = vim.fn.expand(path)
+  if git_root and git_root ~= "" and not is_absolute_path(expanded) then
+    local root = vim.fn.fnamemodify(git_root, ":p"):gsub("[/\\]$", "")
+    expanded = root .. "/" .. expanded
+  end
+
+  return vim.fn.fnamemodify(expanded, ":p")
+end
+
 -- Helper: Check if revision is virtual (commit hash or STAGED)
 -- Virtual: "STAGED" or commit hash | Real: nil or "WORKING"
 function M.is_virtual_revision(revision)
@@ -52,8 +70,10 @@ function M.prepare_buffer(is_virtual, git_root, revision, path)
       }
     end
   else
-    -- Real file: use exact match for buffer lookup
-    local existing_buf = bufnr_exact(path)
+    -- Real file: use an absolute file path for buffer lookup/loading so edits
+    -- and writes always target the intended working-tree file.
+    local real_path = normalize_real_path(path, git_root)
+    local existing_buf = bufnr_exact(real_path)
     if existing_buf ~= -1 then
       -- Buffer already exists, reuse it
       return {
@@ -65,7 +85,7 @@ function M.prepare_buffer(is_virtual, git_root, revision, path)
       -- Buffer doesn't exist, need to :edit it
       return {
         bufnr = nil,
-        target = path,
+        target = real_path,
         needs_edit = true,
       }
     end
