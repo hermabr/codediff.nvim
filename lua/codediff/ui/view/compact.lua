@@ -51,15 +51,24 @@ local function add_review_header_lines(visible, session, side)
 
   local header_key = side == "original" and "original_header_start" or "modified_header_start"
   local content_key = side == "original" and "original_content_start" or "modified_content_start"
+  local placeholder_start_key = side == "original" and "original_placeholder_start" or "modified_placeholder_start"
+  local placeholder_end_key = side == "original" and "original_placeholder_end" or "modified_placeholder_end"
 
   for _, section in ipairs(session.review_sections or {}) do
     local header_start = section[header_key]
     local content_start = section[content_key]
+    local placeholder_start = section[placeholder_start_key]
+    local placeholder_end = section[placeholder_end_key]
     if header_start then
       visible[header_start] = true
     end
     if content_start then
       visible[content_start] = true
+    end
+    if placeholder_start and placeholder_end then
+      for line = placeholder_start, placeholder_end - 1 do
+        visible[line] = true
+      end
     end
   end
 end

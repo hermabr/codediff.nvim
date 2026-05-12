@@ -79,6 +79,24 @@ local function has_virtual_header(bufnr, needle)
   return false
 end
 
+local function filler_rows(bufnr)
+  local review_ns = vim.api.nvim_get_namespaces()["codediff-review"]
+  assert.is_not_nil(review_ns, "Review namespace should exist")
+
+  local rows = {}
+  local marks = vim.api.nvim_buf_get_extmarks(bufnr, review_ns, 0, -1, { details = true })
+  for _, mark in ipairs(marks) do
+    local details = mark[4] or {}
+    for _, chunk in ipairs(details.virt_text or {}) do
+      if (chunk[1] or ""):find("╱", 1, true) then
+        rows[mark[2] + 1] = true
+      end
+    end
+  end
+
+  return rows
+end
+
 local function feedkeys(keys)
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "x", false)
   vim.wait(1000, function()
@@ -315,24 +333,22 @@ describe("CodeDiff review view", function()
     local _, session = wait_for_review()
     local original_headers = virtual_header_lines(session.original_bufnr)
     local modified_headers = virtual_header_lines(session.modified_bufnr)
+    local modified_lines = vim.api.nvim_buf_get_lines(session.modified_bufnr, 0, -1, false)
+    local modified_fillers = filler_rows(session.modified_bufnr)
     local original_deleted_header = find_line(original_headers, "--- a_deleted.txt [unstaged:D]")
     local deleted_header = find_line(modified_headers, "+++ /dev/null [unstaged:D]")
     local changed_header = find_line(modified_headers, "+++ b_changed.txt [unstaged:M]")
-    local has_filler_between = false
 
     assert.is_not_nil(original_deleted_header, "Deleted file should still have an original-side virtual header")
     assert.is_not_nil(deleted_header, "Deleted file should still have a modified-side virtual header")
     assert.is_not_nil(changed_header, "Following file should have a modified-side virtual header")
     assert.is_true(deleted_header < changed_header, "Deleted file header should render before the following file header")
-
-    for line = deleted_header + 1, changed_header - 1 do
-      if modified_headers[line] and modified_headers[line]:find("╱", 1, true) then
-        has_filler_between = true
-        break
-      end
-    end
-
-    assert.is_true(has_filler_between, "Empty-side filler should render between adjacent virtual file headers")
+    assert.are.same({ "", "", "", "before", "new value" }, modified_lines)
+    assert.is_true(modified_fillers[1], "Deleted file should add modified-side filler at row 1")
+    assert.is_true(modified_fillers[2], "Deleted file should add modified-side filler at row 2")
+    assert.is_true(modified_fillers[3], "Deleted file should add modified-side filler at row 3")
+    assert.equal(1, session.review_sections[1].modified_header_start)
+    assert.equal(4, session.review_sections[2].modified_header_start)
   end)
 
   it("writes edited modified review sections to their backing files", function()

@@ -18,6 +18,7 @@ local ns_review = vim.api.nvim_create_namespace("codediff-review")
 local ns_review_syntax = vim.api.nvim_create_namespace("codediff-review-syntax")
 local TREESITTER_PRIORITY = (vim.hl and vim.hl.priorities and vim.hl.priorities.treesitter) or 100
 local REVIEW_SYNTAX_PRIORITY = TREESITTER_PRIORITY + 1
+local FILLER_TEXT = string.rep("╱", 500)
 
 local function append_lines(target, lines)
   for _, line in ipairs(lines or {}) do
@@ -312,7 +313,7 @@ local function treesitter_language_for_path(path)
   return filetype
 end
 
-local function header_virtual_lines(file, side, first, filler_count)
+local function header_virtual_lines(file, side, first)
   local prefix = side == "original" and "---" or "+++"
   local label = string.format("[%s:%s]", file.group or "unstaged", file.status or "?")
   local lines = {}
@@ -322,9 +323,6 @@ local function header_virtual_lines(file, side, first, filler_count)
   table.insert(lines, { { string.rep("=", HEADER_WIDTH), "Title" } })
   table.insert(lines, { { string.format("%s %s %s", prefix, side_path(file, side), label), "Comment" } })
   table.insert(lines, { { string.rep("-", HEADER_WIDTH), "Title" } })
-  for _ = 1, filler_count or 0 do
-    table.insert(lines, { { string.rep("╱", 500), "CodeDiffFiller" } })
-  end
   return lines
 end
 
@@ -411,6 +409,38 @@ local function render_headers(bufnr, sections, side)
   end
 end
 
+local function blank_lines(count)
+  local lines = {}
+  for _ = 1, count do
+    table.insert(lines, "")
+  end
+  return lines
+end
+
+local function render_placeholder_fillers(bufnr, sections, side)
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  for _, section in ipairs(sections) do
+    local start_line = side == "original" and section.original_placeholder_start or section.modified_placeholder_start
+    local end_line = side == "original" and section.original_placeholder_end or section.modified_placeholder_end
+    if start_line and end_line and end_line > start_line then
+      for line = start_line, end_line - 1 do
+        local row = line - 1
+        if row >= 0 and row < line_count then
+          pcall(vim.api.nvim_buf_set_extmark, bufnr, ns_review, row, 0, {
+            end_line = row + 1,
+            end_col = 0,
+            hl_group = "CodeDiffFiller",
+            hl_eol = true,
+            virt_text = { { FILLER_TEXT, "CodeDiffFiller" } },
+            virt_text_pos = "overlay",
+            priority = config.options.diff.highlight_priority,
+          })
+        end
+      end
+    end
+  end
+end
+
 local function apply_section_syntax(bufnr, start_line, lines, language)
   if not language or not lines or #lines == 0 then
     return
@@ -481,15 +511,19 @@ local function build_review(results)
     local modified_offset = #modified_lines
     local original_content_count = #(result.original_lines or {})
     local modified_content_count = #(result.modified_lines or {})
+    local original_placeholder_count = original_content_count == 0 and modified_content_count or 0
+    local modified_placeholder_count = modified_content_count == 0 and original_content_count or 0
+    local original_display_lines = original_placeholder_count > 0 and blank_lines(original_placeholder_count) or result.original_lines
+    local modified_display_lines = modified_placeholder_count > 0 and blank_lines(modified_placeholder_count) or result.modified_lines
+    local original_display_count = #(original_display_lines or {})
+    local modified_display_count = #(modified_display_lines or {})
     local original_content_start = original_offset + 1
     local modified_content_start = modified_offset + 1
-    local original_header_start, original_header_above = header_anchor(original_offset, original_content_start, original_content_count)
-    local modified_header_start, modified_header_above = header_anchor(modified_offset, modified_content_start, modified_content_count)
-    local original_header_filler_count = original_content_count == 0 and modified_content_count or 0
-    local modified_header_filler_count = modified_content_count == 0 and original_content_count or 0
+    local original_header_start, original_header_above = header_anchor(original_offset, original_content_start, original_display_count)
+    local modified_header_start, modified_header_above = header_anchor(modified_offset, modified_content_start, modified_display_count)
 
-    append_lines(original_lines, result.original_lines)
-    append_lines(modified_lines, result.modified_lines)
+    append_lines(original_lines, original_display_lines)
+    append_lines(modified_lines, modified_display_lines)
 
     table.insert(sections, {
       path = result.file.path,
@@ -504,12 +538,16 @@ local function build_review(results)
       modified_header_start = modified_header_start,
       original_header_above = original_header_above,
       modified_header_above = modified_header_above,
-      original_header_lines = header_virtual_lines(result.file, "original", first, original_header_filler_count),
-      modified_header_lines = header_virtual_lines(result.file, "modified", first, modified_header_filler_count),
+      original_header_lines = header_virtual_lines(result.file, "original", first),
+      modified_header_lines = header_virtual_lines(result.file, "modified", first),
       original_content_start = original_content_start,
       modified_content_start = modified_content_start,
       original_content_end = original_content_start + original_content_count,
       modified_content_end = modified_content_start + modified_content_count,
+      original_placeholder_start = original_placeholder_count > 0 and original_content_start or nil,
+      original_placeholder_end = original_placeholder_count > 0 and original_content_start + original_placeholder_count or nil,
+      modified_placeholder_start = modified_placeholder_count > 0 and modified_content_start or nil,
+      modified_placeholder_end = modified_placeholder_count > 0 and modified_content_start + modified_placeholder_count or nil,
     })
 
     table.insert(combined_diff.sections, {
@@ -531,7 +569,7 @@ local function build_review(results)
       for _, mapping in ipairs(lines_diff.changes or {}) do
         local shifted = shift_mapping(mapping, original_offset, modified_offset)
         shifted.section_index = index
-        shifted.suppress_filler = original_header_filler_count > 0 or modified_header_filler_count > 0
+        shifted.suppress_filler = original_placeholder_count > 0 or modified_placeholder_count > 0
         table.insert(combined_diff.changes, shifted)
       end
       for _, move in ipairs(lines_diff.moves or {}) do
@@ -852,6 +890,8 @@ local function render_review(tabpage, original_buf, modified_buf, original_win, 
   core.render_diff(original_buf, modified_buf, original_lines, modified_lines, combined_diff)
   render_headers(original_buf, sections, "original")
   render_headers(modified_buf, sections, "modified")
+  render_placeholder_fillers(original_buf, sections, "original")
+  render_placeholder_fillers(modified_buf, sections, "modified")
   apply_syntax_highlights(original_buf, syntax_sections, "original")
   apply_syntax_highlights(modified_buf, syntax_sections, "modified")
 
