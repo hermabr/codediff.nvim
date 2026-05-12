@@ -3,6 +3,7 @@ local M = {}
 
 local lifecycle = require("codediff.ui.lifecycle")
 local config = require("codediff.config")
+local scroll_sync = require("codediff.ui.view.scroll_sync")
 
 -- Module-level state: maps window ID → set of visible line numbers
 local visible_lines_by_win = {}
@@ -146,6 +147,7 @@ function M.enable(tabpage)
         foldminlines = vim.wo[entry.win].foldminlines,
         foldenable = vim.wo[entry.win].foldenable,
         foldtext = vim.wo[entry.win].foldtext,
+        scrollbind = vim.wo[entry.win].scrollbind,
       }
 
       -- Compute visible lines
@@ -158,6 +160,7 @@ function M.enable(tabpage)
   end
 
   session.compact_mode = true
+  scroll_sync.enable(tabpage)
   return true
 end
 
@@ -171,6 +174,7 @@ function M.disable(tabpage)
   end
 
   local saved = session.compact_saved_fold_state or {}
+  scroll_sync.disable(tabpage)
   for win, fold_state in pairs(saved) do
     if vim.api.nvim_win_is_valid(win) then
       vim.wo[win].foldmethod = fold_state.foldmethod
@@ -179,6 +183,7 @@ function M.disable(tabpage)
       vim.wo[win].foldminlines = fold_state.foldminlines
       vim.wo[win].foldenable = fold_state.foldenable
       vim.wo[win].foldtext = fold_state.foldtext
+      vim.wo[win].scrollbind = fold_state.scrollbind
     end
     visible_lines_by_win[win] = nil
   end
@@ -233,6 +238,8 @@ function M.reapply(tabpage)
       apply_compact_folds(entry)
     end
   end
+
+  scroll_sync.enable(tabpage)
 end
 
 --- Refresh compact mode after diff recomputation.

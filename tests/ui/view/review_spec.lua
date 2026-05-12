@@ -253,6 +253,115 @@ describe("CodeDiff review view", function()
     vim.fn.chdir(repo.dir)
   end
 
+  local function create_repo_with_compact_scroll_drift()
+    repo = h.create_temp_git_repo()
+    repo.write_file("a_formatter.py", {
+      '"""Formatting helpers for display strings."""',
+      "",
+      "",
+      "def normalize_name(name):",
+      '    collapsed = " ".join(name.strip().split())',
+      "    return collapsed.title()",
+      "",
+      "",
+      "def format_user(first_name, last_name):",
+      "    first = normalize_name(first_name)",
+      "    last = normalize_name(last_name)",
+      '    return f"{first} {last}"',
+      "",
+      "",
+      'def format_money(cents, currency="$"):',
+      "    dollars = cents / 100",
+      '    return f"{currency}{dollars:,.2f}"',
+      "",
+      "",
+      "def bullet_list(items):",
+      "    lines = []",
+      "    for item in items:",
+      '        lines.append(f"- {item}")',
+      '    return "\\n".join(lines)',
+    })
+    repo.write_file("b_tests.py", {
+      "from tss.calculator import add, moving_total, subtract, total",
+      "",
+      "",
+      "def test_add():",
+      "    assert add(2, 3) == 5",
+      "",
+      "",
+      "def test_subtract():",
+      "    assert subtract(7, 4) == 3",
+      "",
+      "",
+      "def test_total():",
+      "    assert total([1, 2, 3]) == 6",
+      "",
+      "",
+      "def test_moving_total():",
+      "    assert moving_total([2, 4, 8]) == [2, 6, 14]",
+    })
+    repo.git("add a_formatter.py b_tests.py")
+    repo.git("commit -m initial")
+    repo.write_file("a_formatter.py", {
+      '"""Formatting helpers for display strings."""',
+      "",
+      "",
+      "def normalize_name(name):",
+      '    collapsed = " ".join(name.strip().split())',
+      "    return collapsed.title()",
+      "",
+      "",
+      "def format_user(first_name, last_name):",
+      "    first = normalize_name(first_name)",
+      "    last = normalize_name(last_name)",
+      '    return f"{first} {last}"',
+      "",
+      "",
+      'def format_money(cents, currency="$"):',
+      "    dollars = cents / 100",
+      '    return f"{currency}{dollars:,.2f}"',
+      "",
+      "",
+      "def bullet_list(items, indent=0):",
+      '    prefix = " " * indent + "- "',
+      "    lines = []",
+      "    for item in items:",
+      '        lines.append(f"{prefix}{item}")',
+      '    return "\\n".join(lines)',
+    })
+    repo.write_file("b_tests.py", {
+      "import pytest",
+      "",
+      "from tss.calculator import add, average, moving_total, subtract, total",
+      "",
+      "",
+      "def test_add():",
+      "    assert add(2, 3) == 5",
+      "",
+      "",
+      "def test_subtract():",
+      "    assert subtract(7, 4) == 3",
+      "",
+      "",
+      "def test_total():",
+      "    assert total([1, 2, 3]) == 6",
+      "",
+      "",
+      "def test_average():",
+      "    assert average([10, 20, 30]) == 20",
+      "",
+      "",
+      "def test_average_rejects_empty_values():",
+      "    with pytest.raises(ValueError):",
+      "        average([])",
+      "",
+      "",
+      "def test_moving_total():",
+      "    assert moving_total([2, 4, 8]) == [2, 6, 14]",
+    })
+    vim.fn.chdir(repo.dir)
+  end
+
   it("opens every changed file in one side-by-side review", function()
     create_repo_with_changes()
 
@@ -469,6 +578,43 @@ describe("CodeDiff review view", function()
       assert.equal(0, vim.fn.foldlevel(inserted.modified_content_start + 2), "Inserted content should remain visible")
       assert.equal(1, vim.fn.foldlevel(inserted.modified_content_start + 3), "Unchanged line after insertion should stay foldable")
     end)
+
+    vim.api.nvim_set_current_win(session.modified_win)
+    vim.cmd("normal! 2\005")
+    require("codediff.ui.view.scroll_sync").sync_pair(session.modified_win, session.original_win)
+    assert.equal(
+      vim.fn.screenpos(session.original_win, changed.original_content_start, 1).row,
+      vim.fn.screenpos(session.modified_win, changed.modified_content_start, 1).row,
+      "Following file should stay aligned while scrolling through insertion filler"
+    )
+  end)
+
+  it("keeps visible compact file boundaries aligned after fold-height drift", function()
+    require("codediff").setup({
+      diff = {
+        layout = "side-by-side",
+        jump_to_first_change = false,
+        compact = true,
+        compact_context_lines = 3,
+      },
+    })
+    create_repo_with_compact_scroll_drift()
+
+    vim.cmd("CodeDiff review")
+    local _, session = wait_for_review()
+    local second = session.review_sections[2]
+
+    vim.api.nvim_set_current_win(session.modified_win)
+    vim.api.nvim_win_set_cursor(session.modified_win, { second.modified_content_start, 0 })
+    vim.cmd("normal! zt")
+    vim.cmd("normal! 4\025")
+    require("codediff.ui.view.scroll_sync").sync_pair(session.modified_win, session.original_win)
+
+    local original_row = vim.fn.screenpos(session.original_win, second.original_content_start, 1).row
+    local modified_row = vim.fn.screenpos(session.modified_win, second.modified_content_start, 1).row
+    assert.is_true(original_row > 0, "Second file boundary should be visible on the original side")
+    assert.is_true(modified_row > 0, "Second file boundary should be visible on the modified side")
+    assert.equal(original_row, modified_row, "Visible file boundary should stay aligned after scroll sync")
   end)
 
   it("writes edited modified review sections to their backing files", function()
