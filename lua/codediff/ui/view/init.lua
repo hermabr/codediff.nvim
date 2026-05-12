@@ -31,7 +31,7 @@ end
 ---@field modified_revision string?
 ---@field conflict boolean? For merge conflict mode: render both sides against base
 ---@field layout "side-by-side"|"inline"? Optional per-invocation layout override
----@field explorer_data table? For explorer mode: { status_result }
+---@field explorer_data table? For explorer/review mode: { status_result, focus_file? }
 ---@field history_data table? For history mode: { commits, range, file_path, line_range }
 ---@field review_data table? For review mode: { status_result }
 ---@field line_range table? For history line-range mode: { start_line, end_line }
@@ -73,6 +73,10 @@ end
 
 function M.toggle_layout(tabpage)
   return require("codediff.ui.view.toggle").toggle(tabpage)
+end
+
+function M.toggle_review(tabpage)
+  return require("codediff.ui.view.review").toggle(tabpage)
 end
 
 function M.get_current_layout(tabpage)

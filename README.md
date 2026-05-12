@@ -25,7 +25,8 @@ https://github.com/user-attachments/assets/64c41f01-dffe-4318-bce4-16eec8de356e
   - Deep/dark character-level highlights showing exact changes within lines
 - **Side-by-side diff view** in a new tab with synchronized scrolling
 - **Inline (unified) diff view** — single-window layout with deleted lines as virtual overlays, with treesitter syntax highlighting
-- **Toggle layout** — switch between side-by-side and inline layout at runtime with `t`
+- **Toggle layout** — switch per-file diffs between side-by-side and inline layout at runtime with `t`
+- **Review mode** — start with an all-files side-by-side review and toggle to explorer with `gr`
 - **Git integration**: Compare between any git revision (HEAD, commits, branches, tags)
 - **Same implementation as VSCode's diff engine**, providing identical visual highlighting for most scenarios
 - **Fast C-based diff computation** using FFI with **multi-core parallelization** (OpenMP)
@@ -144,8 +145,8 @@ https://github.com/user-attachments/assets/64c41f01-dffe-4318-bce4-16eec8de356e
         focus_explorer = "<leader>e",   -- Focus explorer panel (explorer mode only)
         next_hunk = "]c",   -- Jump to next change
         prev_hunk = "[c",   -- Jump to previous change
-        next_file = "]f",   -- Next file in explorer/history mode
-        prev_file = "[f",   -- Previous file in explorer/history mode
+        next_file = "]f",   -- Next file in explorer/history/review mode
+        prev_file = "[f",   -- Previous file in explorer/history/review mode
         diff_get = "do",    -- Get change from other buffer (like vimdiff)
         diff_put = "dp",    -- Put change to other buffer (like vimdiff)
         open_in_prev_tab = "gf", -- Open current buffer in previous tab (or create one before)
@@ -158,6 +159,7 @@ https://github.com/user-attachments/assets/64c41f01-dffe-4318-bce4-16eec8de356e
         show_help = "g?",   -- Show floating window with available keymaps
         align_move = "gm", -- Temporarily align moved code blocks across panes
         toggle_layout = "t", -- Toggle between side-by-side and inline layout
+        toggle_review = "gr", -- Toggle between explorer and review modes
         toggle_compact = "gc", -- Toggle compact mode (fold unchanged regions)
       },
       explorer = {
@@ -287,15 +289,15 @@ Both methods automatically place the library in the plugin root directory.
 
 The `:CodeDiff` command supports multiple modes:
 
-### File Explorer Mode
+### Review Mode
 
-Open an interactive file explorer showing changed files:
+Open one continuous side-by-side review of all changed files:
 
 ```vim
-" Show git status in explorer (default)
+" Show git status in review mode (default)
 :CodeDiff
 
-" Show changes for specific revision in explorer
+" Show changes for a specific revision in review mode
 :CodeDiff HEAD~5
 
 " Compare against a branch
@@ -307,9 +309,19 @@ Open an interactive file explorer showing changed files:
 " Compare two revisions (e.g. HEAD vs main)
 :CodeDiff main HEAD
 
-" Override layout for this invocation (works with all subcommands)
-:CodeDiff --inline
+" Use side-by-side explorer layout when toggling from review to explorer
 :CodeDiff main --side-by-side
+```
+
+Press `gr` in review mode to switch to the file explorer for per-file diffs. Press `gr` again to return to the all-files review.
+
+### File Explorer Mode
+
+Explorer mode shows changed files in a panel and renders the selected file in the diff panes. It is available from review mode with `gr`, and remains the default for directory comparisons:
+
+```vim
+:CodeDiff ~/project-v1 ~/project-v2
+:CodeDiff dir /path/to/dir1 /path/to/dir2
 ```
 
 #### PR-like Diff (Merge-base)
@@ -446,7 +458,7 @@ The history panel shows a list of commits. Each commit can be expanded to show i
 **Options:**
 - `--reverse` or `-r`: Show commits in chronological order (oldest first) instead of reverse chronological. Useful for following development story from beginning to end, or reviewing PR changes in the order they were made.
 - `--base` or `-b`: Compare each commit against a fixed revision instead of its parent. Accepts any git revision (`HEAD`, branch name, commit hash) or `WORKING` for the current working tree.
-- `--inline` / `--side-by-side`: Override the diff layout for this invocation. These flags work with all `:CodeDiff` subcommands.
+- `--inline` / `--side-by-side`: Override the per-file diff layout for this invocation. The all-files review is side-by-side; the override is used when toggling to explorer mode and by the other diff modes.
 
 **Visual selection:** When called with a visual range (`:'<,'>CodeDiff history`), only commits that modified the selected lines are shown. This uses `git log -L` under the hood and is useful for tracing the evolution of a specific function or block in a large file.
 
@@ -529,7 +541,7 @@ CodeDiff emits `User` autocmd events at key lifecycle points, allowing you to cu
 | `CodeDiffClose` | Before cleanup starts | `tabpage`, `mode` |
 | `CodeDiffFileSelect` | When a file is selected in explorer | `tabpage`, `path`, `status` |
 
-`mode` is one of `"explorer"`, `"standalone"`, or `"history"`.
+`mode` is one of `"explorer"`, `"review"`, `"standalone"`, or `"history"`.
 
 <details>
 <summary>Example: Disable cursorline in diff windows</summary>

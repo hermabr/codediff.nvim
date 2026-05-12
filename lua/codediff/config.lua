@@ -102,6 +102,7 @@ M.defaults = {
       hunk_textobject = "ih", -- Textobject for hunk (vih to select, yih to yank, etc.)
       align_move = "gm", -- Temporarily align other pane to show paired moved code
       toggle_layout = "t", -- Toggle diff layout for the current codediff session
+      toggle_review = "gr", -- Toggle between explorer and review modes
       toggle_compact = "gc", -- Toggle compact mode (fold unchanged regions, show only hunks + context)
       show_help = "g?", -- Show floating window with available keymaps
     },

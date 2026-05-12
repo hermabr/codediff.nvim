@@ -152,6 +152,62 @@ function M.wait_for_session_ready(tabpage, timeout_ms)
   end, 100)
 end
 
+function M.wait_for_codediff_review(timeout_ms)
+  timeout_ms = timeout_ms or 10000
+  local lifecycle = require('codediff.ui.lifecycle')
+  local tabpage
+
+  local ready = vim.wait(timeout_ms, function()
+    for _, tp in ipairs(vim.api.nvim_list_tabpages()) do
+      local session = lifecycle.get_session(tp)
+      if session and session.mode == "review" and session.review_sections and session.stored_diff_result then
+        local orig_buf, mod_buf = lifecycle.get_buffers(tp)
+        if orig_buf and mod_buf and vim.api.nvim_buf_is_valid(orig_buf) and vim.api.nvim_buf_is_valid(mod_buf) then
+          tabpage = tp
+          return true
+        end
+      end
+    end
+    return false
+  end, 100)
+
+  assert.is_true(ready, "CodeDiff review session should be ready")
+  return tabpage, lifecycle.get_session(tabpage)
+end
+
+function M.open_codediff_review(command, timeout_ms)
+  vim.cmd(command or "CodeDiff")
+  return M.wait_for_codediff_review(timeout_ms)
+end
+
+function M.open_codediff_explorer(command, timeout_ms)
+  local tabpage, session = M.open_codediff_review(command, timeout_ms)
+  if session.mode == "review" then
+    assert.is_true(require("codediff.ui.view").toggle_review(tabpage), "Review mode should toggle off")
+  end
+
+  local lifecycle = require('codediff.ui.lifecycle')
+  local ready = vim.wait(timeout_ms or 10000, function()
+    local current = lifecycle.get_session(tabpage)
+    if not (current and current.mode == "explorer" and current.explorer and not current.explorer.is_hidden) then
+      return false
+    end
+    if not current.explorer.current_selection then
+      return false
+    end
+    if current.original_path == "" and current.modified_path == "" then
+      return false
+    end
+
+    local orig_buf, mod_buf = lifecycle.get_buffers(tabpage)
+    return orig_buf and mod_buf and vim.api.nvim_buf_is_valid(orig_buf) and vim.api.nvim_buf_is_valid(mod_buf)
+  end, 100)
+
+  assert.is_true(ready, "CodeDiff explorer session should be ready")
+  session = lifecycle.get_session(tabpage)
+  return tabpage, session, session.explorer
+end
+
 -- Wait for a virtual file load event to fire for the specified buffer
 -- This is useful when calling view.update with mutable revisions like :0
 -- @param bufnr: The buffer number to wait for

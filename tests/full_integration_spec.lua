@@ -79,44 +79,44 @@ describe("Full Integration Suite", function()
     end
   end)
 
-  -- Helper to verify explorer opened
-  local function assert_explorer_opened()
+  -- Helper to verify review opened
+  local function assert_review_opened()
     local opened = vim.wait(5000, function()
       return vim.fn.tabpagenr('$') > 1
     end)
     assert.is_true(opened, "Should open a new tab")
-    
-    local has_explorer = false
-    vim.wait(2000, function()
-      for i = 1, vim.fn.winnr('$') do
-        local winid = vim.fn.win_getid(i)
-        local bufnr = vim.api.nvim_win_get_buf(winid)
-        if vim.bo[bufnr].filetype == "codediff-explorer" then
-          has_explorer = true
+
+    local lifecycle = require("codediff.ui.lifecycle")
+    local has_review = false
+    vim.wait(5000, function()
+      for _, tp in ipairs(vim.api.nvim_list_tabpages()) do
+        local session = lifecycle.get_session(tp)
+        if session and session.mode == "review" and session.review_sections and session.stored_diff_result then
+          has_review = true
           return true
         end
       end
       return false
     end)
-    assert.is_true(has_explorer, "Should have explorer window")
+    assert.is_true(has_review, "Should have review session")
   end
 
-  -- 1. Explorer Mode: Default
-  it("Runs :CodeDiff (Explorer Default)", function()
+  -- 1. Review Mode: Default
+  it("Runs :CodeDiff (Review Default)", function()
     -- Make a change so there is something to show
     vim.fn.writefile({"line 1", "line 2 modified", "line 3"}, temp_dir .. "/file.txt")
     
     vim.cmd("CodeDiff")
-    assert_explorer_opened()
+    assert_review_opened()
   end)
 
-  -- 2. Explorer Mode: Revision
+  -- 2. Review Mode: Revision
   it("Runs :CodeDiff HEAD~1", function()
     vim.cmd("CodeDiff HEAD~1")
-    assert_explorer_opened()
+    assert_review_opened()
   end)
 
-  -- 3. Explorer Mode: Branch
+  -- 3. Review Mode: Branch
   it("Runs :CodeDiff main", function()
     -- Create a dev branch and switch to it so main is different
     git("reset --hard HEAD~1")
@@ -126,23 +126,23 @@ describe("Full Integration Suite", function()
     
     -- Now compare against main
     vim.cmd("CodeDiff main")
-    assert_explorer_opened()
+    assert_review_opened()
   end)
 
-  -- 4. Explorer Mode: Commit Hash
+  -- 4. Review Mode: Commit Hash
   it("Runs :CodeDiff <commit_hash>", function()
     vim.cmd("CodeDiff " .. commit_hash_1)
-    assert_explorer_opened()
+    assert_review_opened()
   end)
 
-  -- 11. Arbitrary Revision Diff (Explorer)
+  -- 11. Arbitrary Revision Diff (Review)
   it("Runs :CodeDiff main HEAD", function()
     -- Ensure there is a diff between main and HEAD
     git("checkout HEAD~1")
     -- Now HEAD is commit 1. main is commit 2.
     
     vim.cmd("CodeDiff main HEAD")
-    assert_explorer_opened()
+    assert_review_opened()
   end)
 
   -- 12. Merge-base Mode (PR-like diff)
@@ -161,7 +161,7 @@ describe("Full Integration Suite", function()
     -- So :CodeDiff main... should show only the feature.txt change
     
     vim.cmd("CodeDiff main...")
-    assert_explorer_opened()
+    assert_review_opened()
   end)
 
   -- 7. CodeDiffOpen autocmd fires on open
@@ -177,10 +177,10 @@ describe("Full Integration Suite", function()
     })
 
     vim.cmd("CodeDiff")
-    assert_explorer_opened()
+    assert_review_opened()
 
     assert.is_not_nil(event_data, "CodeDiffOpen should fire")
-    assert.equal("explorer", event_data.mode, "Mode should be explorer")
+    assert.equal("review", event_data.mode, "Mode should be review")
     assert.is_not_nil(event_data.tabpage, "tabpage should be set")
 
     vim.api.nvim_del_autocmd(au_id)
@@ -202,14 +202,14 @@ describe("Full Integration Suite", function()
     })
 
     vim.cmd("CodeDiff")
-    assert_explorer_opened()
+    assert_review_opened()
 
     -- Close via tabclose (triggers TabClosed autocmd -> cleanup_diff)
     vim.cmd("tabclose")
     vim.wait(2000, function() return close_data ~= nil end)
 
     assert.is_not_nil(close_data, "CodeDiffClose should fire")
-    assert.equal("explorer", close_data.mode, "Mode should be explorer")
+    assert.equal("review", close_data.mode, "Mode should be review")
 
     vim.api.nvim_del_autocmd(au_id)
   end)

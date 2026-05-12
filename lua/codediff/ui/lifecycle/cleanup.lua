@@ -54,6 +54,9 @@ local function cleanup_diff(tabpage)
   if diff.explorer and diff.explorer._cleanup_auto_refresh then
     pcall(diff.explorer._cleanup_auto_refresh)
   end
+  if diff.explorer and diff.explorer.bufnr and vim.api.nvim_buf_is_valid(diff.explorer.bufnr) then
+    pcall(vim.api.nvim_buf_delete, diff.explorer.bufnr, { force = true })
+  end
 
   -- Send didClose notifications for virtual buffers
   -- Compute URIs on-demand since we don't store them anymore

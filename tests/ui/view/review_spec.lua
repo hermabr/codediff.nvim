@@ -20,6 +20,11 @@ local function wait_for_review()
   return tabpage, lifecycle.get_session(tabpage)
 end
 
+local function open_review()
+  vim.cmd("CodeDiff")
+  return wait_for_review()
+end
+
 local function find_line(lines, needle)
   for index, line in ipairs(lines) do
     if line:find(needle, 1, true) then
@@ -389,12 +394,12 @@ describe("CodeDiff review view", function()
   it("opens every changed file in one side-by-side review", function()
     create_repo_with_changes()
 
-    vim.cmd("CodeDiff review")
-    local tabpage, session = wait_for_review()
+    local tabpage, session = open_review()
     local original_lines = vim.api.nvim_buf_get_lines(session.original_bufnr, 0, -1, false)
     local modified_lines = vim.api.nvim_buf_get_lines(session.modified_bufnr, 0, -1, false)
 
-    assert.is_nil(session.explorer, "Review mode should not create an explorer panel")
+    assert.is_not_nil(session.explorer, "Review mode should keep the explorer session for toggling back")
+    assert.is_true(session.explorer.is_hidden, "Review mode should hide the explorer panel")
     assert.equal(2, #vim.api.nvim_tabpage_list_wins(tabpage), "Review mode should only create the two diff windows")
     assert.equal(2, #session.review_sections, "Review should include both changed files")
 
@@ -412,8 +417,7 @@ describe("CodeDiff review view", function()
   it("keeps the original review buffer read-only", function()
     create_repo_with_single_change()
 
-    vim.cmd("CodeDiff review")
-    local _, session = wait_for_review()
+    local _, session = open_review()
 
     assert.is_false(vim.bo[session.original_bufnr].modifiable, "Original review buffer should not be editable")
     assert.is_true(vim.bo[session.original_bufnr].readonly, "Original review buffer should be readonly")
@@ -421,12 +425,30 @@ describe("CodeDiff review view", function()
     assert.is_false(vim.bo[session.modified_bufnr].readonly, "Modified review buffer should remain writable")
   end)
 
+  it("toggles back to explorer mode", function()
+    create_repo_with_single_change()
+
+    local tabpage = open_review()
+    assert.is_true(require("codediff.ui.view").toggle_review(tabpage), "Review mode should toggle off")
+
+    local restored = vim.wait(5000, function()
+      local session = lifecycle.get_session(tabpage)
+      return session
+        and session.mode == "explorer"
+        and session.explorer
+        and not session.explorer.is_hidden
+        and session.explorer.current_selection
+        and session.original_path ~= ""
+    end, 100)
+
+    assert.is_true(restored, "Explorer mode should be restored with the previous file selected")
+  end)
+
   it("installs the quit keymap immediately", function()
     create_repo_with_single_change()
     local initial_tab_count = #vim.api.nvim_list_tabpages()
 
-    vim.cmd("CodeDiff review")
-    local tabpage, session = wait_for_review()
+    local tabpage, session = open_review()
     vim.api.nvim_set_current_win(session.modified_win)
     vim.cmd("normal q")
 
@@ -441,8 +463,7 @@ describe("CodeDiff review view", function()
   it("refreshes review highlights after diffget without diffing headers", function()
     create_repo_with_single_change()
 
-    vim.cmd("CodeDiff review")
-    local tabpage, session = wait_for_review()
+    local tabpage, session = open_review()
     local modified_lines = vim.api.nvim_buf_get_lines(session.modified_bufnr, 0, -1, false)
     local target_line = find_line(modified_lines, "TWO")
     assert.is_not_nil(target_line, "Changed line should be present before diffget")
@@ -476,8 +497,7 @@ describe("CodeDiff review view", function()
   it("applies syntax highlights for each reviewed file", function()
     create_repo_with_lua_change()
 
-    vim.cmd("CodeDiff review")
-    local _, session = wait_for_review()
+    local _, session = open_review()
     local modified_lines = vim.api.nvim_buf_get_lines(session.modified_bufnr, 0, -1, false)
     local target_line = find_line(modified_lines, "local value = 2")
     assert.is_not_nil(target_line, "Lua content should be present in the review buffer")
@@ -501,8 +521,7 @@ describe("CodeDiff review view", function()
   it("applies injected Markdown code block highlights in a mixed review", function()
     create_repo_with_markdown_and_lua_changes()
 
-    vim.cmd("CodeDiff review")
-    local _, session = wait_for_review()
+    local _, session = open_review()
     local modified_lines = vim.api.nvim_buf_get_lines(session.modified_bufnr, 0, -1, false)
     local markdown_code_line = find_line(modified_lines, "local new_value = 2")
     local lua_line = find_line(modified_lines, "local value = 2")
@@ -530,8 +549,7 @@ describe("CodeDiff review view", function()
     })
     create_repo_with_distant_change()
 
-    vim.cmd("CodeDiff review")
-    local _, session = wait_for_review()
+    local _, session = open_review()
     local section = session.review_sections[1]
     local modified_lines = vim.api.nvim_buf_get_lines(session.modified_bufnr, 0, -1, false)
     local changed_line = find_line(modified_lines, "changed line 12")
@@ -549,8 +567,7 @@ describe("CodeDiff review view", function()
   it("navigates between file sections in review mode", function()
     create_repo_with_changes()
 
-    vim.cmd("CodeDiff review")
-    local _, session = wait_for_review()
+    local _, session = open_review()
     vim.api.nvim_set_current_win(session.modified_win)
     vim.api.nvim_win_set_cursor(session.modified_win, { session.review_sections[1].modified_header_start, 0 })
 

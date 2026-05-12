@@ -488,14 +488,18 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
     end)
   end
 
-  -- Wrap on_file_select to track current file and group
-  explorer.on_file_select = function(file_data, opts)
+  local function set_current_selection(file_data)
     explorer.current_file_path = file_data.path
     explorer.current_file_group = file_data.group
     explorer.current_selection = vim.deepcopy(file_data)
     selected_path = file_data.path
     selected_group = file_data.group
     tree:render()
+  end
+
+  -- Wrap on_file_select to track current file and group
+  explorer.on_file_select = function(file_data, opts)
+    set_current_selection(file_data)
     on_file_select(file_data, opts)
   end
 
@@ -548,27 +552,33 @@ function M.create(status_result, git_root, tabpage, width, base_revision, target
   end
 
   if initial_file then
-    vim.schedule(function()
-      -- Scroll explorer to the selected file using tree:get_node(line) lookup
-      if vim.api.nvim_win_is_valid(explorer.winid) and vim.api.nvim_buf_is_valid(explorer.bufnr) then
-        local line_count = vim.api.nvim_buf_line_count(explorer.bufnr)
-        for line = 1, line_count do
-          local node = explorer.tree:get_node(line)
-          if node and node.data and node.data.path == initial_file.path and node.data.group == initial_file_group then
-            vim.api.nvim_win_set_cursor(explorer.winid, { line, 0 })
-            break
+    local initial_selection = {
+      path = initial_file.path,
+      old_path = initial_file.old_path,
+      status = initial_file.status,
+      git_root = git_root,
+      group = initial_file_group,
+    }
+
+    if opts.select_initial == false then
+      set_current_selection(initial_selection)
+    else
+      vim.schedule(function()
+        -- Scroll explorer to the selected file using tree:get_node(line) lookup
+        if vim.api.nvim_win_is_valid(explorer.winid) and vim.api.nvim_buf_is_valid(explorer.bufnr) then
+          local line_count = vim.api.nvim_buf_line_count(explorer.bufnr)
+          for line = 1, line_count do
+            local node = explorer.tree:get_node(line)
+            if node and node.data and node.data.path == initial_file.path and node.data.group == initial_file_group then
+              vim.api.nvim_win_set_cursor(explorer.winid, { line, 0 })
+              break
+            end
           end
         end
-      end
 
-      explorer.on_file_select({
-        path = initial_file.path,
-        old_path = initial_file.old_path,
-        status = initial_file.status,
-        git_root = git_root,
-        group = initial_file_group,
-      })
-    end)
+        explorer.on_file_select(initial_selection)
+      end)
+    end
   end
 
   -- Setup auto-refresh

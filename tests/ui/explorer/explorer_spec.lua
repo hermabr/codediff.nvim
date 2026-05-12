@@ -189,7 +189,7 @@ describe("Explorer Mode", function()
     
     -- Open explorer
     vim.cmd("edit " .. temp_dir .. "/file1.txt")
-    vim.cmd("CodeDiff")
+    h.open_codediff_explorer()
     
     -- Wait for async operations
     vim.wait(3000, function()
@@ -221,7 +221,7 @@ describe("Explorer Mode", function()
     vim.o.columns = 160  -- Set known terminal width
     
     vim.cmd("edit " .. temp_dir .. "/file1.txt")
-    vim.cmd("CodeDiff")
+    h.open_codediff_explorer()
     
     -- Wait longer and check for explorer specifically
     local has_explorer = false
@@ -273,7 +273,7 @@ describe("Explorer Mode", function()
   -- Test 5: Explorer shows correct content structure
   it("Shows correct explorer content structure", function()
     vim.cmd("edit " .. temp_dir .. "/file1.txt")
-    vim.cmd("CodeDiff")
+    h.open_codediff_explorer()
     
     -- Wait for explorer to be created
     local explorer_buf = nil
@@ -320,7 +320,7 @@ describe("Explorer Mode", function()
   -- Test 6: First file is auto-selected and displayed
   it("Auto-selects and displays first file", function()
     vim.cmd("edit " .. temp_dir .. "/file1.txt")
-    vim.cmd("CodeDiff")
+    h.open_codediff_explorer()
     
     -- Wait for explorer and first file to load
     vim.wait(6000, function()
@@ -363,7 +363,7 @@ describe("Explorer Mode", function()
   -- Test 7: Lifecycle session is created correctly
   it("Creates lifecycle session with explorer mode", function()
     vim.cmd("edit " .. temp_dir .. "/file1.txt")
-    vim.cmd("CodeDiff")
+    h.open_codediff_explorer()
     
     vim.wait(3000, function()
       return vim.fn.winnr('$') == 3

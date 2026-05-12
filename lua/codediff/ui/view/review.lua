@@ -1166,6 +1166,395 @@ function M.refresh(tabpage)
   return true
 end
 
+local function is_valid_win(win)
+  return win and vim.api.nvim_win_is_valid(win)
+end
+
+local function is_virtual_revision(revision)
+  return revision ~= nil and revision ~= "WORKING"
+end
+
+local function create_placeholder_buffer(name)
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.bo[bufnr].buftype = "nofile"
+  vim.bo[bufnr].bufhidden = "wipe"
+  vim.bo[bufnr].swapfile = false
+  if name then
+    pcall(vim.api.nvim_buf_set_name, bufnr, name)
+  end
+  return bufnr
+end
+
+local function clear_session_buffers(session)
+  local auto_refresh = require("codediff.ui.auto_refresh")
+  for _, bufnr in ipairs({ session.original_bufnr, session.modified_bufnr }) do
+    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+      auto_refresh.disable(bufnr)
+      lifecycle.clear_highlights(bufnr)
+    end
+  end
+end
+
+local function close_result_window(tabpage, session)
+  if session.result_win and vim.api.nvim_win_is_valid(session.result_win) then
+    vim.w[session.result_win].codediff_restore = nil
+    pcall(vim.api.nvim_win_close, session.result_win, true)
+  end
+
+  lifecycle.set_result(tabpage, nil, nil)
+  session.result_base_lines = nil
+  session.conflict_blocks = nil
+end
+
+local function ensure_side_by_side_windows(tabpage)
+  local session = lifecycle.get_session(tabpage)
+  if not session then
+    return nil, nil
+  end
+
+  local original_win = session.original_win
+  local modified_win = session.modified_win
+  local original_valid = is_valid_win(original_win)
+  local modified_valid = is_valid_win(modified_win)
+
+  if original_valid and modified_valid and original_win ~= modified_win then
+    session.single_pane = nil
+    lifecycle.update_layout(tabpage, "side-by-side")
+    return original_win, modified_win
+  end
+
+  local keep_win = modified_valid and modified_win or (original_valid and original_win or nil)
+  if not keep_win then
+    return nil, nil
+  end
+
+  vim.api.nvim_set_current_win(keep_win)
+
+  if modified_valid and not original_valid then
+    local split_cmd = config.options.diff.original_position == "right" and "rightbelow vsplit" or "leftabove vsplit"
+    vim.cmd(split_cmd)
+    original_win = vim.api.nvim_get_current_win()
+    modified_win = keep_win
+  elseif original_valid and not modified_valid then
+    local split_cmd = config.options.diff.original_position == "right" and "leftabove vsplit" or "rightbelow vsplit"
+    vim.cmd(split_cmd)
+    modified_win = vim.api.nvim_get_current_win()
+    original_win = keep_win
+  else
+    local split_cmd = config.options.diff.original_position == "right" and "rightbelow vsplit" or "leftabove vsplit"
+    vim.cmd(split_cmd)
+    original_win = vim.api.nvim_get_current_win()
+    modified_win = keep_win
+  end
+
+  if is_valid_win(original_win) then
+    vim.w[original_win].codediff_restore = 1
+  end
+  if is_valid_win(modified_win) then
+    vim.w[modified_win].codediff_restore = 1
+  end
+
+  session.original_win = original_win
+  session.modified_win = modified_win
+  session.single_pane = nil
+  lifecycle.update_layout(tabpage, "side-by-side")
+  return original_win, modified_win
+end
+
+local function hide_explorer_panel(explorer)
+  if not explorer or not explorer.split or explorer.is_hidden then
+    return
+  end
+
+  explorer.split:hide()
+  explorer.winid = nil
+  explorer.is_hidden = true
+end
+
+local function show_explorer_panel(explorer)
+  if not explorer or not explorer.split then
+    return
+  end
+
+  explorer.split:show()
+  explorer.winid = explorer.split.winid
+  explorer.is_hidden = false
+end
+
+local function setup_hidden_explorer(tabpage, session_config)
+  if not (session_config.explorer_data and session_config.explorer_data.status_result and session_config.git_root) then
+    return nil
+  end
+
+  local explorer_opts = {
+    focus_file = session_config.explorer_data.focus_file,
+    select_initial = false,
+  }
+  local explorer = require("codediff.ui.explorer").create(
+    session_config.explorer_data.status_result,
+    session_config.git_root,
+    tabpage,
+    nil,
+    session_config.original_revision,
+    session_config.modified_revision,
+    explorer_opts
+  )
+
+  hide_explorer_panel(explorer)
+  lifecycle.set_explorer(tabpage, explorer)
+  return explorer
+end
+
+function M.show(tabpage, on_ready)
+  tabpage = tabpage or vim.api.nvim_get_current_tabpage()
+  local session = lifecycle.get_session(tabpage)
+  if not session then
+    return false
+  end
+
+  if session.mode == "review" then
+    return true
+  end
+
+  if session.mode ~= "explorer" then
+    vim.notify("Review mode is only available from explorer mode", vim.log.levels.WARN)
+    return false
+  end
+
+  if not session.git_root then
+    vim.notify("Review mode is only available for git explorer sessions", vim.log.levels.WARN)
+    return false
+  end
+
+  local explorer = session.explorer
+  if not explorer or not explorer.status_result then
+    vim.notify("No explorer data available for review mode", vim.log.levels.WARN)
+    return false
+  end
+
+  session.review_return = {
+    layout = session.layout or "side-by-side",
+    selection = explorer.current_selection and vim.deepcopy(explorer.current_selection) or nil,
+    explorer_was_hidden = explorer.is_hidden == true,
+  }
+  local old_original_buf = session.original_bufnr
+  local old_modified_buf = session.modified_bufnr
+  local old_original_virtual = is_virtual_revision(session.original_revision)
+  local old_modified_virtual = is_virtual_revision(session.modified_revision)
+
+  clear_session_buffers(session)
+  close_result_window(tabpage, session)
+  lifecycle.clear_tab_keymaps(tabpage)
+
+  local original_win, modified_win = ensure_side_by_side_windows(tabpage)
+  if not original_win or not modified_win then
+    return false
+  end
+
+  hide_explorer_panel(explorer)
+
+  local original_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].original", { editable = false })
+  local modified_buf = create_review_buffer("CodeDiff Review [" .. tabpage .. "].modified", { editable = true })
+  vim.api.nvim_win_set_buf(original_win, original_buf)
+  vim.api.nvim_win_set_buf(modified_win, modified_buf)
+  welcome_window.sync(original_win)
+  welcome_window.sync(modified_win)
+  setup_windows(original_win, modified_win)
+  set_buffer_lines(original_buf, { "Loading CodeDiff review..." })
+  set_buffer_lines(modified_buf, { "Loading CodeDiff review..." })
+
+  lifecycle.update_mode(tabpage, "review")
+  lifecycle.update_layout(tabpage, "side-by-side")
+  lifecycle.update_git_root(tabpage, session.git_root)
+  lifecycle.update_paths(tabpage, "", "")
+  lifecycle.update_revisions(tabpage, explorer.base_revision, explorer.target_revision)
+  lifecycle.update_buffers(tabpage, original_buf, modified_buf)
+  lifecycle.update_diff_result(tabpage, { changes = {}, moves = {} })
+  lifecycle.update_changedtick(
+    tabpage,
+    vim.api.nvim_buf_get_changedtick(original_buf),
+    vim.api.nvim_buf_get_changedtick(modified_buf)
+  )
+
+  session = lifecycle.get_session(tabpage)
+  if session then
+    session.single_pane = nil
+    session.review_sections = {}
+    session.review_errors = {}
+  end
+
+  if
+    old_original_virtual
+    and old_original_buf
+    and vim.api.nvim_buf_is_valid(old_original_buf)
+    and old_original_buf ~= original_buf
+    and old_original_buf ~= modified_buf
+  then
+    pcall(vim.api.nvim_buf_delete, old_original_buf, { force = true })
+  end
+  if
+    old_modified_virtual
+    and old_modified_buf
+    and vim.api.nvim_buf_is_valid(old_modified_buf)
+    and old_modified_buf ~= original_buf
+    and old_modified_buf ~= modified_buf
+  then
+    pcall(vim.api.nvim_buf_delete, old_modified_buf, { force = true })
+  end
+
+  view_keymaps.setup_all_keymaps(tabpage, original_buf, modified_buf, false)
+
+  local status_result = explorer.status_result or { unstaged = {}, staged = {}, conflicts = {} }
+  local files = flatten_status_files(status_result)
+  local context = {
+    git_root = explorer.git_root,
+    base_revision = explorer.base_revision,
+    target_revision = explorer.target_revision,
+    status_result = status_result,
+  }
+
+  load_files(files, context, function(results, errors)
+    if not vim.api.nvim_buf_is_valid(original_buf) or not vim.api.nvim_buf_is_valid(modified_buf) then
+      return
+    end
+    render_review(tabpage, original_buf, modified_buf, original_win, modified_win, results, errors, on_ready)
+  end)
+
+  layout.arrange(tabpage)
+  return true
+end
+
+function M.hide(tabpage)
+  tabpage = tabpage or vim.api.nvim_get_current_tabpage()
+  local session = lifecycle.get_session(tabpage)
+  if not session or session.mode ~= "review" then
+    return false
+  end
+
+  local explorer = session.explorer
+  if not explorer then
+    vim.notify("No explorer session available to return to", vim.log.levels.WARN)
+    return false
+  end
+
+  local return_state = session.review_return or {}
+  local restore_layout = return_state.layout or "side-by-side"
+  local old_original_buf = session.original_bufnr
+  local old_modified_buf = session.modified_bufnr
+
+  clear_session_buffers(session)
+  lifecycle.clear_tab_keymaps(tabpage)
+
+  local original_buf = create_placeholder_buffer("CodeDiff " .. tabpage .. ".1")
+  local modified_buf = create_placeholder_buffer("CodeDiff " .. tabpage .. ".2")
+  local original_win = session.original_win
+  local modified_win = session.modified_win
+
+  if restore_layout == "inline" then
+    local keep_win = is_valid_win(modified_win) and modified_win or (is_valid_win(original_win) and original_win or nil)
+    if not keep_win then
+      return false
+    end
+
+    lifecycle.update_layout(tabpage, "inline")
+    if is_valid_win(original_win) and original_win ~= keep_win then
+      vim.w[original_win].codediff_restore = nil
+      pcall(vim.api.nvim_win_close, original_win, true)
+    end
+
+    original_win = keep_win
+    modified_win = keep_win
+    vim.api.nvim_win_set_buf(modified_win, modified_buf)
+    welcome_window.sync(modified_win)
+  else
+    original_win, modified_win = ensure_side_by_side_windows(tabpage)
+    if not original_win or not modified_win then
+      return false
+    end
+    vim.api.nvim_win_set_buf(original_win, original_buf)
+    vim.api.nvim_win_set_buf(modified_win, modified_buf)
+    welcome_window.sync(original_win)
+    welcome_window.sync(modified_win)
+    lifecycle.update_layout(tabpage, "side-by-side")
+  end
+
+  lifecycle.update_mode(tabpage, "explorer")
+  lifecycle.update_git_root(tabpage, explorer.git_root)
+  lifecycle.update_paths(tabpage, "", "")
+  lifecycle.update_revisions(tabpage, explorer.base_revision, explorer.target_revision)
+  lifecycle.update_buffers(tabpage, original_buf, modified_buf)
+  lifecycle.update_diff_result(tabpage, { changes = {}, moves = {} })
+  lifecycle.update_changedtick(
+    tabpage,
+    vim.api.nvim_buf_get_changedtick(original_buf),
+    vim.api.nvim_buf_get_changedtick(modified_buf)
+  )
+
+  session = lifecycle.get_session(tabpage)
+  if session then
+    session.original_win = original_win
+    session.modified_win = modified_win
+    session.single_pane = nil
+    session.review_sections = nil
+    session.review_errors = nil
+    session.review_return = nil
+  end
+
+  if
+    old_original_buf
+    and vim.api.nvim_buf_is_valid(old_original_buf)
+    and old_original_buf ~= original_buf
+    and old_original_buf ~= modified_buf
+  then
+    pcall(vim.api.nvim_buf_delete, old_original_buf, { force = true })
+  end
+  if
+    old_modified_buf
+    and vim.api.nvim_buf_is_valid(old_modified_buf)
+    and old_modified_buf ~= original_buf
+    and old_modified_buf ~= modified_buf
+  then
+    pcall(vim.api.nvim_buf_delete, old_modified_buf, { force = true })
+  end
+
+  if return_state.explorer_was_hidden then
+    hide_explorer_panel(explorer)
+  else
+    show_explorer_panel(explorer)
+  end
+
+  view_keymaps.setup_all_keymaps(tabpage, original_buf, modified_buf, true)
+  layout.arrange(tabpage)
+
+  local selection = return_state.selection or explorer.current_selection
+  if selection and explorer.on_file_select then
+    explorer.on_file_select(vim.deepcopy(selection), { force = true, no_jump = true })
+  else
+    require("codediff.ui.explorer").rerender_current(explorer)
+  end
+
+  return true
+end
+
+function M.toggle(tabpage)
+  tabpage = tabpage or vim.api.nvim_get_current_tabpage()
+  local session = lifecycle.get_session(tabpage)
+  if not session then
+    return false
+  end
+
+  if session.mode == "review" then
+    return M.hide(tabpage)
+  end
+
+  if session.mode == "explorer" then
+    return M.show(tabpage)
+  end
+
+  vim.notify("Review mode is only available for explorer sessions", vim.log.levels.WARN)
+  return false
+end
+
 ---@param session_config SessionConfig
 ---@param _filetype? string
 ---@param on_ready? function
@@ -1211,10 +1600,20 @@ function M.create(session_config, _filetype, on_ready)
     function()
       local ob, mb = lifecycle.get_buffers(tabpage)
       if ob and mb then
-        view_keymaps.setup_all_keymaps(tabpage, ob, mb, false)
+        local is_explorer = lifecycle.get_mode(tabpage) == "explorer"
+        view_keymaps.setup_all_keymaps(tabpage, ob, mb, is_explorer)
       end
     end
   )
+  local explorer = setup_hidden_explorer(tabpage, session_config)
+  local session = lifecycle.get_session(tabpage)
+  if session then
+    session.review_return = {
+      layout = session_config.layout or config.options.diff.layout,
+      selection = explorer and explorer.current_selection and vim.deepcopy(explorer.current_selection) or nil,
+      explorer_was_hidden = false,
+    }
+  end
   view_keymaps.setup_all_keymaps(tabpage, original_buf, modified_buf, false)
 
   setup_writeback(tabpage, modified_buf)

@@ -198,42 +198,8 @@ describe("Welcome Page", function()
       vim.fn.chdir(repo.dir)
       vim.cmd("edit " .. repo.path("test.txt"))
 
-      -- Open CodeDiff explorer
-      vim.cmd("CodeDiff")
-
-      -- Wait for explorer and diff to be ready
-      -- CodeDiff opens a new tab, so we need to find the right tabpage
       local lifecycle = require("codediff.ui.lifecycle")
-
-      local tabpage
-      local explorer_ready = vim.wait(10000, function()
-        -- Find the tabpage with a session (CodeDiff creates a new tab)
-        for _, tp in ipairs(vim.api.nvim_list_tabpages()) do
-          local s = lifecycle.get_session(tp)
-          if s then
-            tabpage = tp
-            break
-          end
-        end
-        if not tabpage then
-          return false
-        end
-        local session = lifecycle.get_session(tabpage)
-        if not session then
-          return false
-        end
-        if not session.explorer then
-          return false
-        end
-        -- Wait for diff to render (buffers loaded)
-        local orig_buf, mod_buf = lifecycle.get_buffers(tabpage)
-        if not orig_buf or not mod_buf then
-          return false
-        end
-        return vim.api.nvim_buf_is_valid(orig_buf) and vim.api.nvim_buf_is_valid(mod_buf)
-      end, 100)
-
-      assert.is_true(explorer_ready, "Explorer and diff should be ready")
+      local tabpage = helpers.open_codediff_explorer()
 
       local session = lifecycle.get_session(tabpage)
       assert.is_not_nil(session, "Session should exist")

@@ -10,7 +10,7 @@ details, see README.md.
 QUICK START                                           *codediff-quickstart*
 
 After installing the plugin and running |:CodeDiff|, you can:
-- Browse changed files (default explorer)
+- Review all changed files, then toggle to explorer for per-file diffs
 - Compare the current file with a git revision
 - Compare two files or directories
 
@@ -27,13 +27,23 @@ COMMANDS                                                  *codediff-commands*
 ==============================================================================
 USAGE                                                       *codediff-usage*
 
-File explorer mode (git status by default):
+Review mode (git status by default):
 >vim
   :CodeDiff
   :CodeDiff HEAD~5
   :CodeDiff main
   :CodeDiff abc123
   :CodeDiff main HEAD
+<
+
+Review mode renders all changed files in one continuous side-by-side diff.
+Press `gr` in review mode to switch to explorer mode for per-file diffs. Press
+`gr` again to return to review mode.
+
+Directory comparisons open explorer mode directly:
+>vim
+  :CodeDiff ~/project-v1 ~/project-v2
+  :CodeDiff dir /path/to/dir1 /path/to/dir2
 <
 
 Git diff mode (current buffer vs revision):
@@ -157,7 +167,7 @@ TOGGLING LAYOUT                                   *codediff-toggle-layout*
 
 Press `t` in a diff view to toggle between side-by-side and inline layout.
 The current file is re-rendered in the new layout automatically. This works
-in all modes (explorer, history, standalone).
+in explorer, history, and standalone modes.
 
 The toggle keymap can be customized:
 >lua
@@ -234,6 +244,8 @@ Setup entry point:
         show_help = "g?",
         align_move = "gm",
         toggle_layout = "t",
+        toggle_review = "gr",
+        toggle_compact = "gc",
       },
       explorer = {
         select = "<CR>",
@@ -365,7 +377,7 @@ All events pass a `data` table accessible via the autocmd callback's
 
   CodeDiffOpen / CodeDiffClose:
     `tabpage`   Tab page ID of the diff session.
-    `mode`      One of "explorer", "standalone", or "history".
+    `mode`      One of "explorer", "review", "standalone", or "history".
 
   CodeDiffFileSelect:
     `tabpage`   Tab page ID of the diff session.

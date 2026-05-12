@@ -52,17 +52,15 @@ local function open_codediff_and_wait(repo)
   vim.cmd("CodeDiff")
 
   local lifecycle = require("codediff.ui.lifecycle")
-  local tabpage
+  local tabpage = h.wait_for_codediff_review(10000)
+  assert.is_true(require("codediff.ui.view").toggle_review(tabpage), "Review mode should toggle off")
 
   local ready = vim.wait(10000, function()
-    for _, tp in ipairs(vim.api.nvim_list_tabpages()) do
-      local s = lifecycle.get_session(tp)
-      if s and s.explorer then
-        tabpage = tp
-        local orig_buf, mod_buf = lifecycle.get_buffers(tp)
-        if orig_buf and mod_buf then
-          return vim.api.nvim_buf_is_valid(orig_buf) and vim.api.nvim_buf_is_valid(mod_buf)
-        end
+    local s = lifecycle.get_session(tabpage)
+    if s and s.mode == "explorer" and s.explorer and not s.explorer.is_hidden then
+      local orig_buf, mod_buf = lifecycle.get_buffers(tabpage)
+      if orig_buf and mod_buf then
+        return vim.api.nvim_buf_is_valid(orig_buf) and vim.api.nvim_buf_is_valid(mod_buf)
       end
     end
     return false
