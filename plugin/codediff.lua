@@ -21,6 +21,35 @@ vim.api.nvim_create_autocmd("ColorScheme", {
   end,
 })
 
+-- Swap to graphite colorscheme while a CodeDiff session is open
+local codediff_theme_group = vim.api.nvim_create_augroup("CodeDiffTheme", { clear = true })
+vim.api.nvim_create_autocmd("User", {
+  group = codediff_theme_group,
+  pattern = "CodeDiffOpen",
+  callback = function()
+    vim.g.codediff_saved_colorscheme = vim.g.colors_name
+    vim.schedule(function()
+      local ok, err = pcall(vim.cmd.colorscheme, "graphite")
+      if not ok then
+        vim.notify("CodeDiff: failed to load colorscheme 'graphite': " .. tostring(err), vim.log.levels.WARN)
+      end
+    end)
+  end,
+})
+vim.api.nvim_create_autocmd("User", {
+  group = codediff_theme_group,
+  pattern = "CodeDiffClose",
+  callback = function()
+    local prev = vim.g.codediff_saved_colorscheme
+    if prev then
+      vim.schedule(function()
+        pcall(vim.cmd.colorscheme, prev)
+      end)
+      vim.g.codediff_saved_colorscheme = nil
+    end
+  end,
+})
+
 -- Cache for revision candidates (avoid repeated git calls during rapid completions)
 local rev_cache = {
   candidates = nil,
