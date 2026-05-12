@@ -1,33 +1,23 @@
-# Agent Instructions
+# AGENTS.md
 
-## General CLI Agent Behavior Instructions
+## Task Completion Requirements
 
-> ⚠️ **CRITICAL: NEVER commit code unless the user explicitly requests it.** After completing changes, STOP and wait for user to say "commit". Each commit request authorizes only ONE commit operation.
+- All of `uv run ruff format`, `uv run ruff check`, `uv run ty check` and `uv run pytest`, must pass before considering tasks completed.
 
-### Communication and File Operation Guidelines
+## Project Snapshot
 
-1. **Output Messages**: When responding to users, utilize the native chat output interface. Do not use command-line utilities such as `cat`, `echo`, or `write-host` to display messages in the console.
+codediff.nvim is a minimal and flexible plugin for showing git diffs in neovim.
 
-2. **File Creation and Editing**: Always use native file operation tools (create, edit, patch/diff APIs) for all file operations. Do not use shell redirection operators (`>`, `>>`, `<<`) or command-line utilities (`cat`, `sed`, `awk`, `grep`) to create or modify files. This applies to ALL files, regardless of location (project files, `/tmp`, `%TEMP%`, etc.).
+This repository is a VERY EARLY WIP and does not have any users. Proposing sweeping changes that improve long-term maintainability is encouraged.
 
-   **Prohibited patterns**:
-   - `cat > /tmp/file.md << 'EOF'`
-   - `echo "content" > file.txt`
-   - `sed -i 's/pattern/replacement/' file.js`
-   
-   **Required approach**: Use native `create` or `str_replace` tools instead.
+## Core Priorities
 
-3. **Experimental and Demonstration Scripts**: When running experiments, demonstrations, or temporary operations that require script files, create the script files explicitly in temporary directories (`/tmp` on Linux/macOS, `%TEMP%` on Windows) using native file creation tools first, then execute them. Do not use inline heredocs or shell redirection. Do not place code that should have commited and checked-in in `/tmp` folder
+1. Performance first.
+2. Reliability first.
+3. Keep behavior predictable under load and during failures (session restarts, reconnects).
 
-   **Example workflow**:
-   - Step 1: Use `create` tool to make `/tmp/experiment.sh`
-   - Step 2: Execute `bash /tmp/experiment.sh`
-   - Step 3: Clean up the file after use
+If a tradeoff is required, choose correctness and robustness over short-term convenience.
 
-4. **Trailing Spaces**: NEVER add trailing spaces to any line in any file. Always ensure lines end cleanly without whitespace.
+## Maintainability
 
-5. **Pull Requests**: When asked to create a PR, push the branch as is (do not create a new branch), create PR with comprehensive description (summary, changes, benefits, testing), and enable auto-merge.
-
-## Path-Specific Instructions
-
-Path-specific instructions are defined in `.github/copilot-instructions.md` files within respective directories.
+Long term maintainability is a core priority. If you add new functionality, first check if there is shared logic that can be extracted to a separate module. Duplicate logic across multiple files is a code smell and should be avoided. Don't be afraid to change existing code. Don't take shortcuts by just adding local logic to solve a problem. Make an active effort to implement all changes as directed and minimally as possible.
