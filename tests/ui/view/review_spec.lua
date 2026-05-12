@@ -97,6 +97,22 @@ local function filler_rows(bufnr)
   return rows
 end
 
+local function diff_filler_rows(bufnr)
+  local filler_ns = vim.api.nvim_get_namespaces()["codediff-filler"]
+  assert.is_not_nil(filler_ns, "Diff filler namespace should exist")
+
+  local rows = {}
+  local marks = vim.api.nvim_buf_get_extmarks(bufnr, filler_ns, 0, -1, { details = true })
+  for _, mark in ipairs(marks) do
+    local details = mark[4] or {}
+    if details.virt_lines and #details.virt_lines > 0 then
+      rows[mark[2] + 1] = #details.virt_lines
+    end
+  end
+
+  return rows
+end
+
 local function feedkeys(keys)
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "x", false)
   vim.wait(1000, function()
@@ -223,6 +239,17 @@ describe("CodeDiff review view", function()
     repo.write_file("a_added.txt", { "added one", "added two", "added three", "added four" })
     repo.write_file("b_changed.txt", { "before", "new value" })
     repo.git("add a_added.txt b_changed.txt")
+    vim.fn.chdir(repo.dir)
+  end
+
+  local function create_repo_with_inserted_then_modified()
+    repo = h.create_temp_git_repo()
+    repo.write_file("a_insert.txt", { "alpha", "omega" })
+    repo.write_file("b_changed.txt", { "before", "old value" })
+    repo.git("add a_insert.txt b_changed.txt")
+    repo.git("commit -m initial")
+    repo.write_file("a_insert.txt", { "alpha", "beta", "gamma", "omega" })
+    repo.write_file("b_changed.txt", { "before", "new value" })
     vim.fn.chdir(repo.dir)
   end
 
@@ -403,6 +430,44 @@ describe("CodeDiff review view", function()
       for line = added.original_placeholder_start, added.original_placeholder_end - 1 do
         assert.equal(0, vim.fn.foldlevel(line), "Added-file placeholder should remain visible in compact mode")
       end
+    end)
+  end)
+
+  it("keeps compact insertion fillers visible before the following file", function()
+    require("codediff").setup({
+      diff = {
+        layout = "side-by-side",
+        jump_to_first_change = false,
+        compact = true,
+        compact_context_lines = 0,
+      },
+    })
+    create_repo_with_inserted_then_modified()
+
+    vim.cmd("CodeDiff review")
+    local _, session = wait_for_review()
+    local inserted = session.review_sections[1]
+    local changed = session.review_sections[2]
+    local original_fillers = diff_filler_rows(session.original_bufnr)
+
+    assert.equal("a_insert.txt", inserted.path)
+    assert.equal("b_changed.txt", changed.path)
+    assert.equal(2, original_fillers[inserted.original_content_start], "Insertion filler should be anchored on a visible original line")
+    assert.equal(
+      vim.fn.screenpos(session.original_win, changed.original_content_start, 1).row,
+      vim.fn.screenpos(session.modified_win, changed.modified_content_start, 1).row,
+      "Following file should start on the same screen row"
+    )
+
+    vim.api.nvim_win_call(session.original_win, function()
+      assert.equal(0, vim.fn.foldlevel(inserted.original_content_start), "Insertion filler anchor should remain visible")
+      assert.equal(1, vim.fn.foldlevel(inserted.original_content_start + 1), "Unchanged line after insertion should stay foldable")
+    end)
+
+    vim.api.nvim_win_call(session.modified_win, function()
+      assert.equal(0, vim.fn.foldlevel(inserted.modified_content_start + 1), "Inserted content should remain visible")
+      assert.equal(0, vim.fn.foldlevel(inserted.modified_content_start + 2), "Inserted content should remain visible")
+      assert.equal(1, vim.fn.foldlevel(inserted.modified_content_start + 3), "Unchanged line after insertion should stay foldable")
     end)
   end)
 

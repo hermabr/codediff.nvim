@@ -30,8 +30,11 @@ function M.compute_visible_lines(changes, side, line_count, context_lines)
     local range_start = range.start_line
     local range_end = range.end_line -- exclusive
 
-    -- For zero-width ranges (pure insertion/deletion), use start_line as anchor
+    -- For zero-width ranges (pure insertion/deletion), the alignment filler is
+    -- attached after the line before start_line. Keep that anchor visible so
+    -- compact folds do not hide the virtual filler rows.
     if range_start == range_end then
+      range_start = math.max(1, range_start - 1)
       range_end = range_start + 1
     end
 
@@ -91,6 +94,18 @@ local function compact_entries(session)
   return entries
 end
 
+local function apply_compact_folds(entry)
+  vim.wo[entry.win].foldmethod = "expr"
+  vim.wo[entry.win].foldexpr = "v:lua.require'codediff.ui.view.compact'.foldexpr_eval()"
+  vim.wo[entry.win].foldenable = true
+  vim.wo[entry.win].foldlevel = 0
+  vim.wo[entry.win].foldminlines = 1
+
+  vim.api.nvim_win_call(entry.win, function()
+    vim.cmd("silent! normal! zX")
+  end)
+end
+
 local function has_conflict_result(session)
   return session.result_win and vim.api.nvim_win_is_valid(session.result_win)
 end
@@ -138,11 +153,7 @@ function M.enable(tabpage)
       visible_lines_by_win[entry.win] = compute_visible_lines_for_session(session, entry.side, line_count, context)
 
       -- Apply fold settings
-      vim.wo[entry.win].foldmethod = "expr"
-      vim.wo[entry.win].foldexpr = "v:lua.require'codediff.ui.view.compact'.foldexpr_eval()"
-      vim.wo[entry.win].foldenable = true
-      vim.wo[entry.win].foldlevel = 0
-      vim.wo[entry.win].foldminlines = 1
+      apply_compact_folds(entry)
     end
   end
 
@@ -219,11 +230,7 @@ function M.reapply(tabpage)
       local line_count = vim.api.nvim_buf_line_count(entry.buf)
       visible_lines_by_win[entry.win] = compute_visible_lines_for_session(session, entry.side, line_count, context)
 
-      vim.wo[entry.win].foldmethod = "expr"
-      vim.wo[entry.win].foldexpr = "v:lua.require'codediff.ui.view.compact'.foldexpr_eval()"
-      vim.wo[entry.win].foldenable = true
-      vim.wo[entry.win].foldlevel = 0
-      vim.wo[entry.win].foldminlines = 1
+      apply_compact_folds(entry)
     end
   end
 end
