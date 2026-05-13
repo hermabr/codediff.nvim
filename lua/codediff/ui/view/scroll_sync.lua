@@ -239,6 +239,13 @@ function M.sync_pair(source_win, target_win)
   align_visible_review_boundary(source_win, target_win)
 end
 
+function M.sync_pair_without_scrollbind(source_win, target_win)
+  local window_state = require("codediff.ui.view.window_state")
+  window_state.with_scrollbind_disabled({ source_win, target_win }, function()
+    M.sync_pair(source_win, target_win)
+  end)
+end
+
 function M.enable(tabpage)
   if not vim.api.nvim_win_text_height then
     return

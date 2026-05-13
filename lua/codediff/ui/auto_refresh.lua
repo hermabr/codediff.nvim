@@ -4,14 +4,82 @@ local M = {}
 
 local diff = require("codediff.core.diff")
 local core = require("codediff.ui.core")
+local scroll_sync = require("codediff.ui.view.scroll_sync")
+local window_state = require("codediff.ui.view.window_state")
 
 -- Throttle delay in milliseconds
 local THROTTLE_DELAY_MS = 200
 
 -- Track watched buffers for auto-refresh
--- Structure: { bufnr = { timer } }
+-- Structure: { bufnr = { timer = number?, dirty = boolean } }
 -- Buffer pair info is retrieved from lifecycle
 local watched_buffers = {}
+
+local function valid_win(win)
+  return win and vim.api.nvim_win_is_valid(win)
+end
+
+local function is_insert_like_mode()
+  local mode = vim.api.nvim_get_mode().mode
+  local prefix = mode:sub(1, 1)
+  return prefix == "i" or prefix == "R" or mode:match("^ni") ~= nil
+end
+
+local function should_defer_refresh(bufnr)
+  return vim.api.nvim_get_current_buf() == bufnr and is_insert_like_mode()
+end
+
+local function session_windows(session)
+  if not session then
+    return {}
+  end
+
+  return {
+    session.original_win,
+    session.modified_win,
+    session.result_win,
+  }
+end
+
+local function buffer_windows(bufnr)
+  local wins = {}
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(win) == bufnr then
+      table.insert(wins, win)
+    end
+  end
+  return wins
+end
+
+local function sync_peer_scroll(session)
+  if
+    not session
+    or session.layout == "inline"
+    or not valid_win(session.original_win)
+    or not valid_win(session.modified_win)
+  then
+    return
+  end
+
+  local current_win = vim.api.nvim_get_current_win()
+  if current_win == session.original_win then
+    scroll_sync.sync_pair_without_scrollbind(session.original_win, session.modified_win)
+  elseif current_win == session.modified_win then
+    scroll_sync.sync_pair_without_scrollbind(session.modified_win, session.original_win)
+  end
+end
+
+local function render_with_preserved_state(session, render_fn)
+  local saved = window_state.save(session_windows(session))
+  local ok, err = pcall(render_fn)
+  window_state.restore(saved)
+
+  if not ok then
+    error(err, 0)
+  end
+
+  sync_peer_scroll(session)
+end
 
 -- Cancel pending timer for a buffer
 local function cancel_timer(bufnr)
@@ -76,7 +144,9 @@ local function do_diff_update(bufnr, skip_watcher_check)
     vim.schedule(function()
       local ok, review = pcall(require, "codediff.ui.view.review")
       if ok and review then
-        review.refresh(tabpage)
+        render_with_preserved_state(lifecycle.get_session(tabpage), function()
+          review.refresh(tabpage)
+        end)
       end
     end)
     return
@@ -108,105 +178,58 @@ local function do_diff_update(bufnr, skip_watcher_check)
       return
     end
 
-    -- Update stored diff result in lifecycle (critical for hunk navigation and do/dp)
-    lifecycle.update_diff_result(tabpage, lines_diff)
-
-    -- Refresh compact mode folds if active
-    require("codediff.ui.view.compact").refresh(tabpage)
-
-    -- Check if this is an inline mode session
     local session = lifecycle.get_session(tabpage)
-    if session and session.layout == "inline" then
-      local inline_mod = require("codediff.ui.inline")
-      inline_mod.render_inline_diff(modified_bufnr, lines_diff, original_lines, modified_lines)
-      return
-    end
+    render_with_preserved_state(session, function()
+      -- Update stored diff result in lifecycle (critical for hunk navigation and do/dp)
+      lifecycle.update_diff_result(tabpage, lines_diff)
+      lifecycle.update_changedtick(
+        tabpage,
+        vim.api.nvim_buf_get_changedtick(original_bufnr),
+        vim.api.nvim_buf_get_changedtick(modified_bufnr)
+      )
+      local state = require("codediff.ui.lifecycle.state")
+      lifecycle.update_mtime(tabpage, state.get_file_mtime(original_bufnr), state.get_file_mtime(modified_bufnr))
 
-    -- Side-by-side mode: Update decorations on both buffers
-    core.render_diff(original_bufnr, modified_bufnr, original_lines, modified_lines, lines_diff)
+      -- Refresh compact mode folds if active
+      require("codediff.ui.view.compact").refresh(tabpage)
 
-    -- Re-sync scrollbind after filler changes
-    -- This ensures all windows stay aligned even if fillers were added/removed
-    local original_win, modified_win, result_win = nil, nil, nil
-    local _, stored_result_win = lifecycle.get_result(tabpage)
-
-    for _, win in ipairs(vim.api.nvim_list_wins()) do
-      local buf = vim.api.nvim_win_get_buf(win)
-      if buf == original_bufnr then
-        original_win = win
-      elseif buf == modified_bufnr then
-        modified_win = win
+      if session and session.layout == "inline" then
+        local inline_mod = require("codediff.ui.inline")
+        inline_mod.render_inline_diff(modified_bufnr, lines_diff, original_lines, modified_lines)
+      else
+        core.render_diff(original_bufnr, modified_bufnr, original_lines, modified_lines, lines_diff)
       end
-    end
-
-    -- Check if result window is valid
-    if stored_result_win and vim.api.nvim_win_is_valid(stored_result_win) then
-      result_win = stored_result_win
-    end
-
-    if original_win and modified_win then
-      local current_win = vim.api.nvim_get_current_win()
-
-      -- Only resync if user is in one of the diff windows
-      if current_win == original_win or current_win == modified_win or current_win == result_win then
-        local other_win = current_win == original_win and modified_win or original_win
-
-        -- Step 1: Save full view state for all windows to prevent flicker
-        local saved_view = vim.fn.winsaveview()
-        vim.api.nvim_set_current_win(other_win)
-        local other_saved_view = vim.fn.winsaveview()
-        local result_saved_view = nil
-        if result_win then
-          vim.api.nvim_set_current_win(result_win)
-          result_saved_view = vim.fn.winsaveview()
-        end
-        vim.api.nvim_set_current_win(current_win)
-
-        -- Step 2: Reset all windows to line 1 (baseline for scrollbind)
-        vim.api.nvim_win_set_cursor(original_win, { 1, 0 })
-        vim.api.nvim_win_set_cursor(modified_win, { 1, 0 })
-        if result_win then
-          vim.api.nvim_win_set_cursor(result_win, { 1, 0 })
-        end
-
-        -- Step 3: Re-establish scrollbind (reset sync state)
-        vim.wo[original_win].scrollbind = false
-        vim.wo[modified_win].scrollbind = false
-        if result_win then
-          vim.wo[result_win].scrollbind = false
-        end
-        vim.wo[original_win].scrollbind = true
-        vim.wo[modified_win].scrollbind = true
-        if result_win then
-          vim.wo[result_win].scrollbind = true
-        end
-
-        -- Step 4: Restore full view state for all windows
-        vim.api.nvim_set_current_win(other_win)
-        vim.fn.winrestview(other_saved_view)
-        if result_win and result_saved_view then
-          vim.api.nvim_set_current_win(result_win)
-          vim.fn.winrestview(result_saved_view)
-        end
-        vim.api.nvim_set_current_win(current_win)
-        vim.fn.winrestview(saved_view)
-      end
-    end
+    end)
   end)
 end
 
 -- Trigger diff update with throttling
-local function trigger_diff_update(bufnr)
+local function trigger_diff_update(bufnr, opts)
+  opts = opts or {}
   local watcher = watched_buffers[bufnr]
   if not watcher then
     return
   end
+
+  if not opts.force and should_defer_refresh(bufnr) then
+    cancel_timer(bufnr)
+    watcher.dirty = true
+    return
+  end
+
+  watcher.dirty = false
 
   -- Cancel existing timer
   cancel_timer(bufnr)
 
   -- Start new timer
   watcher.timer = vim.fn.timer_start(THROTTLE_DELAY_MS, function()
+    local current = watched_buffers[bufnr]
+    if current and should_defer_refresh(bufnr) then
+      current.timer = nil
+      current.dirty = true
+      return
+    end
     do_diff_update(bufnr)
   end)
 end
@@ -215,9 +238,10 @@ end
 -- @param bufnr number: Buffer to watch for changes
 -- Note: Buffer pair info is retrieved from lifecycle when needed
 function M.enable(bufnr)
-  -- Store watcher info (just timer)
+  -- Store watcher info for throttling and insert-mode coalescing
   watched_buffers[bufnr] = {
     timer = nil,
+    dirty = false,
   }
 
   -- Setup autocmds for this buffer
@@ -229,6 +253,17 @@ function M.enable(bufnr)
     buffer = bufnr,
     callback = function()
       trigger_diff_update(bufnr)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("InsertLeave", {
+    group = buf_augroup,
+    buffer = bufnr,
+    callback = function()
+      local watcher = watched_buffers[bufnr]
+      if watcher and watcher.dirty then
+        trigger_diff_update(bufnr, { force = true })
+      end
     end,
   })
 
@@ -260,13 +295,23 @@ function M.disable(bufnr)
   pcall(vim.api.nvim_del_augroup_by_name, "codediff_auto_refresh_" .. bufnr)
 end
 
--- Track result buffer timers only (base_lines stored in lifecycle)
-local result_timers = {}
+-- Track result buffer refresh state only (base_lines stored in lifecycle)
+local result_watchers = {}
+
+local function cancel_result_timer(bufnr)
+  local watcher = result_watchers[bufnr]
+  if watcher and watcher.timer then
+    vim.fn.timer_stop(watcher.timer)
+    watcher.timer = nil
+  end
+end
 
 -- Perform diff update for result buffer against BASE
 local function do_result_diff_update(bufnr)
   -- Clear timer reference
-  result_timers[bufnr] = nil
+  if result_watchers[bufnr] then
+    result_watchers[bufnr].timer = nil
+  end
 
   -- Validate buffer still exists
   if not vim.api.nvim_buf_is_valid(bufnr) then
@@ -300,20 +345,47 @@ local function do_result_diff_update(bufnr)
     return
   end
 
-  -- Render highlights on result buffer only (modified side = insertions shown as green)
-  core.render_single_buffer(bufnr, lines_diff, "modified")
+  local saved = window_state.save(buffer_windows(bufnr))
+  local ok, err = pcall(function()
+    -- Render highlights on result buffer only (modified side = insertions shown as green)
+    core.render_single_buffer(bufnr, lines_diff, "modified")
+  end)
+  window_state.restore(saved)
+
+  if not ok then
+    error(err, 0)
+  end
 end
 
 -- Trigger throttled diff update for result buffer
-local function trigger_result_diff_update(bufnr)
-  -- Cancel existing timer
-  if result_timers[bufnr] then
-    vim.fn.timer_stop(result_timers[bufnr])
+local function trigger_result_diff_update(bufnr, opts)
+  opts = opts or {}
+  local watcher = result_watchers[bufnr]
+  if not watcher then
+    return
   end
 
+  if not opts.force and should_defer_refresh(bufnr) then
+    cancel_result_timer(bufnr)
+    watcher.dirty = true
+    return
+  end
+
+  watcher.dirty = false
+  cancel_result_timer(bufnr)
+
   -- Start new throttled timer
-  result_timers[bufnr] = vim.fn.timer_start(THROTTLE_DELAY_MS, function()
+  watcher.timer = vim.fn.timer_start(THROTTLE_DELAY_MS, function()
     vim.schedule(function()
+      local current = result_watchers[bufnr]
+      if not current then
+        return
+      end
+      if should_defer_refresh(bufnr) then
+        current.timer = nil
+        current.dirty = true
+        return
+      end
       do_result_diff_update(bufnr)
     end)
   end)
@@ -328,6 +400,11 @@ function M.enable_for_result(bufnr)
   -- Disable if already enabled
   M.disable_result(bufnr)
 
+  result_watchers[bufnr] = {
+    timer = nil,
+    dirty = false,
+  }
+
   -- Setup autocmds for this buffer
   local buf_augroup = vim.api.nvim_create_augroup("codediff_result_refresh_" .. bufnr, { clear = true })
 
@@ -337,6 +414,17 @@ function M.enable_for_result(bufnr)
     buffer = bufnr,
     callback = function()
       trigger_result_diff_update(bufnr)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("InsertLeave", {
+    group = buf_augroup,
+    buffer = bufnr,
+    callback = function()
+      local watcher = result_watchers[bufnr]
+      if watcher and watcher.dirty then
+        trigger_result_diff_update(bufnr, { force = true })
+      end
     end,
   })
 
@@ -357,10 +445,8 @@ end
 
 -- Disable auto-refresh for result buffer
 function M.disable_result(bufnr)
-  if result_timers[bufnr] then
-    vim.fn.timer_stop(result_timers[bufnr])
-    result_timers[bufnr] = nil
-  end
+  cancel_result_timer(bufnr)
+  result_watchers[bufnr] = nil
 
   -- Clear autocmd group
   pcall(vim.api.nvim_del_augroup_by_name, "codediff_result_refresh_" .. bufnr)
@@ -372,9 +458,9 @@ function M.refresh_result_now(bufnr)
     return
   end
   -- Cancel pending timer if any
-  if result_timers[bufnr] then
-    vim.fn.timer_stop(result_timers[bufnr])
-    result_timers[bufnr] = nil
+  cancel_result_timer(bufnr)
+  if result_watchers[bufnr] then
+    result_watchers[bufnr].dirty = false
   end
   do_result_diff_update(bufnr)
 end
@@ -450,7 +536,7 @@ function M.cleanup_all()
   for bufnr, _ in pairs(watched_buffers) do
     M.disable(bufnr)
   end
-  for bufnr, _ in pairs(result_timers) do
+  for bufnr, _ in pairs(result_watchers) do
     M.disable_result(bufnr)
   end
 end

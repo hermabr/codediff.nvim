@@ -13,6 +13,7 @@ local render = require("codediff.ui.view.render")
 local view_keymaps = require("codediff.ui.view.keymaps")
 local review_sections = require("codediff.ui.view.review_sections")
 local welcome_window = require("codediff.ui.view.welcome_window")
+local window_state = require("codediff.ui.view.window_state")
 
 local HEADER_WIDTH = 80
 local ns_review = vim.api.nvim_create_namespace("codediff-review")
@@ -1213,6 +1214,10 @@ function M.refresh(tabpage)
     return false
   end
 
+  local original_win = session.original_win
+  local modified_win = session.modified_win
+  local saved_window_state = window_state.save({ original_win, modified_win })
+
   local sections = sync_section_positions(session)
   local combined_diff, syntax_sections = build_review_diff_from_buffers(session, original_buf, modified_buf, sections)
   local original_lines = vim.api.nvim_buf_get_lines(original_buf, 0, -1, false)
@@ -1238,8 +1243,6 @@ function M.refresh(tabpage)
   )
   compact.refresh(tabpage)
 
-  local original_win = session.original_win
-  local modified_win = session.modified_win
   if original_win and modified_win and vim.api.nvim_win_is_valid(original_win) and vim.api.nvim_win_is_valid(modified_win) then
     local current_win = vim.api.nvim_get_current_win()
     local orig_cursor = vim.api.nvim_win_get_cursor(original_win)
@@ -1259,6 +1262,8 @@ function M.refresh(tabpage)
       vim.api.nvim_set_current_win(current_win)
     end
   end
+
+  window_state.restore(saved_window_state)
 
   vim.bo[original_buf].modified = false
   vim.bo[modified_buf].modified = false
