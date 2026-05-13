@@ -73,11 +73,6 @@ local function base256_color(r, g, b)
   return 16 + r * 36 + g * 6 + b
 end
 
--- Returns the base 256 color palette index of greyscale shade where the shade is 0-23 inclusive.
-local function base256_greyscale(shade)
-  return 232 + shade
-end
-
 -- Setup VSCode-style highlight groups
 function M.setup()
   local opts = config.options.highlights
@@ -144,18 +139,10 @@ function M.setup()
     default = true,
   })
 
-  local normal_hl = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
-  local filler_bg = normal_hl.bg
-  if filler_bg then
-    filler_bg = adjust_brightness(filler_bg, vim.o.background == "light" and 0.85 or 1.45)
-  end
-
-  -- Filler lines use blank text with a subtle background to mark missing rows.
-  vim.api.nvim_set_hl(0, "CodeDiffFiller", {
-    bg = filler_bg or 0x1f2428,
-    ctermbg = base256_greyscale(vim.o.background == "light" and 22 or 2),
-    ctermfg = base256_greyscale(8),
-  })
+  -- Filler rows are structural virtual lines used for side-by-side alignment.
+  -- Keep the highlight transparent so insert/delete-only hunks do not render
+  -- distracting blank stripes while preserving the virtual rows for scroll sync.
+  vim.api.nvim_set_hl(0, "CodeDiffFiller", {})
 
   -- Explorer directory text (smaller and dimmed)
   vim.api.nvim_set_hl(0, "ExplorerDirectorySmall", {

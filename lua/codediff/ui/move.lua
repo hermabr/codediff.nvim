@@ -169,7 +169,7 @@ local function place_annotation(ann_bufnr, filler_bufnr, ann_line, label, change
 
   local filler_anchor, filler_above = compute_filler_position(ann_line, change, is_orig_side, changes, filler_line_count)
   pcall(vim.api.nvim_buf_set_extmark, filler_bufnr, ns_filler, filler_anchor, 0, {
-    virt_lines = { { { string.rep(" ", 500), "CodeDiffFiller" } } },
+    virt_lines = { { { "", "CodeDiffFiller" } } },
     virt_lines_above = filler_above,
     priority = 250,
   })
