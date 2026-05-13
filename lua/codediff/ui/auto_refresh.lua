@@ -4,8 +4,7 @@ local M = {}
 
 local diff = require("codediff.core.diff")
 local core = require("codediff.ui.core")
-local scroll_sync = require("codediff.ui.view.scroll_sync")
-local window_state = require("codediff.ui.view.window_state")
+local viewport = require("codediff.ui.view.viewport")
 
 -- Throttle delay in milliseconds
 local THROTTLE_DELAY_MS = 200
@@ -15,10 +14,6 @@ local THROTTLE_DELAY_MS = 200
 -- Buffer pair info is retrieved from lifecycle
 local watched_buffers = {}
 
-local function valid_win(win)
-  return win and vim.api.nvim_win_is_valid(win)
-end
-
 local function is_insert_like_mode()
   local mode = vim.api.nvim_get_mode().mode
   local prefix = mode:sub(1, 1)
@@ -27,18 +22,6 @@ end
 
 local function should_defer_refresh(bufnr)
   return vim.api.nvim_get_current_buf() == bufnr and is_insert_like_mode()
-end
-
-local function session_windows(session)
-  if not session then
-    return {}
-  end
-
-  return {
-    session.original_win,
-    session.modified_win,
-    session.result_win,
-  }
 end
 
 local function buffer_windows(bufnr)
@@ -51,34 +34,39 @@ local function buffer_windows(bufnr)
   return wins
 end
 
-local function sync_peer_scroll(session)
+local function find_session_windows(lifecycle, tabpage, original_bufnr, modified_bufnr)
+  local original_win, modified_win = lifecycle.get_windows(tabpage)
+
   if
-    not session
-    or session.layout == "inline"
-    or not valid_win(session.original_win)
-    or not valid_win(session.modified_win)
+    original_win
+    and (not vim.api.nvim_win_is_valid(original_win) or vim.api.nvim_win_get_buf(original_win) ~= original_bufnr)
   then
-    return
+    original_win = nil
+  end
+  if
+    modified_win
+    and (not vim.api.nvim_win_is_valid(modified_win) or vim.api.nvim_win_get_buf(modified_win) ~= modified_bufnr)
+  then
+    modified_win = nil
   end
 
-  local current_win = vim.api.nvim_get_current_win()
-  if current_win == session.original_win then
-    scroll_sync.sync_pair_without_scrollbind(session.original_win, session.modified_win)
-  elseif current_win == session.modified_win then
-    scroll_sync.sync_pair_without_scrollbind(session.modified_win, session.original_win)
-  end
-end
-
-local function render_with_preserved_state(session, render_fn)
-  local saved = window_state.save(session_windows(session))
-  local ok, err = pcall(render_fn)
-  window_state.restore(saved)
-
-  if not ok then
-    error(err, 0)
+  if not original_win or not modified_win then
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local buf = vim.api.nvim_win_get_buf(win)
+      if not original_win and buf == original_bufnr then
+        original_win = win
+      elseif not modified_win and buf == modified_bufnr then
+        modified_win = win
+      end
+    end
   end
 
-  sync_peer_scroll(session)
+  local _, result_win = lifecycle.get_result(tabpage)
+  if result_win and not vim.api.nvim_win_is_valid(result_win) then
+    result_win = nil
+  end
+
+  return original_win, modified_win, result_win
 end
 
 -- Cancel pending timer for a buffer
@@ -144,9 +132,7 @@ local function do_diff_update(bufnr, skip_watcher_check)
     vim.schedule(function()
       local ok, review = pcall(require, "codediff.ui.view.review")
       if ok and review then
-        render_with_preserved_state(lifecycle.get_session(tabpage), function()
-          review.refresh(tabpage)
-        end)
+        review.refresh(tabpage)
       end
     end)
     return
@@ -178,8 +164,13 @@ local function do_diff_update(bufnr, skip_watcher_check)
       return
     end
 
+    local original_win, modified_win, result_win =
+      find_session_windows(lifecycle, tabpage, original_bufnr, modified_bufnr)
+    local snapshot = viewport.capture({ original_win, modified_win, result_win })
     local session = lifecycle.get_session(tabpage)
-    render_with_preserved_state(session, function()
+    local is_inline = session and session.layout == "inline"
+
+    local ok, err = pcall(function()
       -- Update stored diff result in lifecycle (critical for hunk navigation and do/dp)
       lifecycle.update_diff_result(tabpage, lines_diff)
       lifecycle.update_changedtick(
@@ -190,16 +181,27 @@ local function do_diff_update(bufnr, skip_watcher_check)
       local state = require("codediff.ui.lifecycle.state")
       lifecycle.update_mtime(tabpage, state.get_file_mtime(original_bufnr), state.get_file_mtime(modified_bufnr))
 
-      -- Refresh compact mode folds if active
+      -- Refresh compact mode folds if active. This can alter visual rows, so it
+      -- must run inside the captured viewport window.
       require("codediff.ui.view.compact").refresh(tabpage)
 
-      if session and session.layout == "inline" then
+      if is_inline then
         local inline_mod = require("codediff.ui.inline")
         inline_mod.render_inline_diff(modified_bufnr, lines_diff, original_lines, modified_lines)
       else
         core.render_diff(original_bufnr, modified_bufnr, original_lines, modified_lines, lines_diff)
       end
     end)
+
+    if is_inline then
+      viewport.restore(snapshot)
+    else
+      viewport.restore_pair(snapshot, original_win, modified_win)
+    end
+
+    if not ok then
+      error(err, 0)
+    end
   end)
 end
 
@@ -345,12 +347,12 @@ local function do_result_diff_update(bufnr)
     return
   end
 
-  local saved = window_state.save(buffer_windows(bufnr))
+  local snapshot = viewport.capture(buffer_windows(bufnr))
   local ok, err = pcall(function()
     -- Render highlights on result buffer only (modified side = insertions shown as green)
     core.render_single_buffer(bufnr, lines_diff, "modified")
   end)
-  window_state.restore(saved)
+  viewport.restore(snapshot)
 
   if not ok then
     error(err, 0)

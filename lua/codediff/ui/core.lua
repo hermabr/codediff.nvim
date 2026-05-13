@@ -41,10 +41,9 @@ local function insert_filler_lines(bufnr, after_line_0idx, count)
   end
 
   local virt_lines_content = {}
-  local filler_text = string.rep(" ", 500)
 
   for _ = 1, count do
-    table.insert(virt_lines_content, { { filler_text, "CodeDiffFiller" } })
+    table.insert(virt_lines_content, { { "", "CodeDiffFiller" } })
   end
 
   vim.api.nvim_buf_set_extmark(bufnr, ns_filler, after_line_0idx, 0, {

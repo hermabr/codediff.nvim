@@ -303,7 +303,7 @@ CodeDiff defines highlight groups matching VSCode's diff colors:
 - CodeDiffLineDelete - light red background for deleted lines
 - CodeDiffCharInsert - deep/dark green for inserted characters
 - CodeDiffCharDelete - deep/dark red for deleted characters
-- CodeDiffFiller - subtle background for filler lines where the opposite side has content
+- CodeDiffFiller - transparent filler rows used to keep side-by-side panes aligned
 - CodeDiffLineMove - background for moved lines (derived from DiffChange)
 - CodeDiffCharMove - character-level highlight for moved text
 - CodeDiffMoveFrom - sign/annotation color for move source

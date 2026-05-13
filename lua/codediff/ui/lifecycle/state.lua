@@ -3,7 +3,7 @@
 local M = {}
 
 local highlights = require("codediff.ui.highlights")
-local window_state = require("codediff.ui.view.window_state")
+local viewport = require("codediff.ui.view.viewport")
 
 -- Save buffer state before modifications
 local function save_buffer_state(bufnr)
@@ -77,29 +77,6 @@ M.get_file_mtime = get_file_mtime
 -- Check if a revision represents a virtual buffer
 local function is_virtual_revision(revision)
   return revision ~= nil and revision ~= "WORKING"
-end
-
-local function valid_win(win)
-  return win and vim.api.nvim_win_is_valid(win)
-end
-
-local function sync_peer_scroll(diff)
-  if
-    not diff
-    or diff.layout == "inline"
-    or not valid_win(diff.original_win)
-    or not valid_win(diff.modified_win)
-  then
-    return
-  end
-
-  local current_win = vim.api.nvim_get_current_win()
-  local scroll_sync = require("codediff.ui.view.scroll_sync")
-  if current_win == diff.original_win then
-    scroll_sync.sync_pair_without_scrollbind(diff.original_win, diff.modified_win)
-  elseif current_win == diff.modified_win then
-    scroll_sync.sync_pair_without_scrollbind(diff.modified_win, diff.original_win)
-  end
 end
 
 -- Suspend diff view (when leaving tab)
@@ -182,7 +159,6 @@ local function resume_diff(tabpage)
   local modified_lines = vim.api.nvim_buf_get_lines(diff.modified_bufnr, 0, -1, false)
 
   local lines_diff
-  local diff_was_recomputed = false
 
   if need_recompute or not diff.stored_diff_result then
     -- Buffer or file changed, recompute diff
@@ -193,7 +169,6 @@ local function resume_diff(tabpage)
       ignore_trim_whitespace = config.options.diff.ignore_trim_whitespace,
       compute_moves = config.options.diff.compute_moves,
     })
-    diff_was_recomputed = true
 
     if lines_diff then
       -- Store new diff result
@@ -212,7 +187,7 @@ local function resume_diff(tabpage)
 
   -- Render with fresh content and (possibly reused) diff result
   if lines_diff then
-    local saved_window_state = window_state.save({ diff.original_win, diff.modified_win, diff.result_win })
+    local snapshot = viewport.capture({ diff.original_win, diff.modified_win, diff.result_win })
 
     local ok, err = pcall(function()
       if diff.layout == "inline" then
@@ -224,14 +199,14 @@ local function resume_diff(tabpage)
       end
     end)
 
-    window_state.restore(saved_window_state)
+    if diff.layout == "inline" then
+      viewport.restore(snapshot)
+    else
+      viewport.restore_pair(snapshot, diff.original_win, diff.modified_win)
+    end
 
     if not ok then
       error(err, 0)
-    end
-
-    if diff_was_recomputed then
-      sync_peer_scroll(diff)
     end
   end
 
