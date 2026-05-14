@@ -1,6 +1,7 @@
 -- Git operations module for vscode-diff
 -- All operations are async and atomic
 local M = {}
+local run_git_async
 
 -- Unquote git C-quoted paths (e.g., "my file.md" -> my file.md)
 local function unquote_path(path)
@@ -13,6 +14,77 @@ local function unquote_path(path)
     return unquoted
   end
   return path
+end
+
+local function normalize_numstat_path(path)
+  local old_path, new_path = path:match("^(.-) %=> (.-)$")
+  if old_path and new_path then
+    return new_path
+  end
+
+  local prefix, from_name, to_name, suffix = path:match("^(.-){(.-) %=> (.-)}(.*)$")
+  if prefix and to_name then
+    return prefix .. to_name .. suffix
+  end
+
+  return path
+end
+
+local function parse_numstat(output)
+  local stats = {}
+
+  for line in output:gmatch("[^\r\n]+") do
+    local additions, deletions, path = line:match("^([^\t]+)\t([^\t]+)\t(.+)$")
+    additions = tonumber(additions)
+    deletions = tonumber(deletions)
+
+    if additions and deletions and path then
+      local parts = vim.split(path, "\t")
+      local current_path = parts[#parts]
+      current_path = unquote_path(current_path)
+      current_path = normalize_numstat_path(current_path)
+
+      stats[current_path] = {
+        additions = additions,
+        deletions = deletions,
+      }
+    end
+  end
+
+  return stats
+end
+
+local function attach_stats(files, stats)
+  for _, file in ipairs(files or {}) do
+    local stat = stats[file.path]
+    if stat then
+      file.additions = stat.additions
+      file.deletions = stat.deletions
+    end
+  end
+end
+
+local function attach_untracked_stats(files, git_root)
+  for _, file in ipairs(files or {}) do
+    if file.status == "??" then
+      local path = git_root .. "/" .. file.path
+      local ok, lines = pcall(vim.fn.readfile, path)
+      if ok and type(lines) == "table" then
+        file.additions = #lines
+        file.deletions = 0
+      end
+    end
+  end
+end
+
+local function fetch_numstat(args, git_root, callback)
+  run_git_async(args, { cwd = git_root }, function(err, output)
+    if err then
+      callback({})
+      return
+    end
+    callback(parse_numstat(output))
+  end)
 end
 
 -- LRU Cache for git file content
@@ -91,7 +163,7 @@ end
 
 -- Run a git command asynchronously
 -- Uses vim.system if available (Neovim 0.10+), falls back to vim.loop.spawn
-local function run_git_async(args, opts, callback)
+run_git_async = function(args, opts, callback)
   opts = opts or {}
 
   -- Use vim.system if available (Neovim 0.10+)
@@ -389,7 +461,24 @@ function M.get_status(git_root, callback)
         end
       end
 
-      callback(nil, result)
+      local pending = 2
+      local function done()
+        pending = pending - 1
+        if pending == 0 then
+          callback(nil, result)
+        end
+      end
+
+      fetch_numstat({ "diff", "--numstat", "-M" }, git_root, function(stats)
+        attach_stats(result.unstaged, stats)
+        attach_untracked_stats(result.unstaged, git_root)
+        done()
+      end)
+
+      fetch_numstat({ "diff", "--cached", "--numstat", "-M" }, git_root, function(stats)
+        attach_stats(result.staged, stats)
+        done()
+      end)
     end
   )
 end
@@ -434,26 +523,31 @@ function M.get_diff_revision(revision, git_root, callback)
       end
     end
 
-    -- Now get untracked files (they don't exist in the revision, so they're "new")
-    run_git_async({ "ls-files", "--others", "--exclude-standard" }, { cwd = git_root }, function(err_untracked, output_untracked)
-      if err_untracked then
-        -- If getting untracked files fails, just return what we have
-        callback(nil, result)
-        return
-      end
+    fetch_numstat({ "diff", "--numstat", "-M", revision }, git_root, function(stats)
+      attach_stats(result.unstaged, stats)
 
-      -- Add untracked files as new files with "??" status
-      for line in output_untracked:gmatch("[^\r\n]+") do
-        if #line > 0 then
-          table.insert(result.unstaged, {
-            path = line,
-            status = "??",
-            old_path = nil,
-          })
+      -- Now get untracked files (they don't exist in the revision, so they're "new")
+      run_git_async({ "ls-files", "--others", "--exclude-standard" }, { cwd = git_root }, function(err_untracked, output_untracked)
+        if err_untracked then
+          -- If getting untracked files fails, just return what we have
+          callback(nil, result)
+          return
         end
-      end
 
-      callback(nil, result)
+        -- Add untracked files as new files with "??" status
+        for line in output_untracked:gmatch("[^\r\n]+") do
+          if #line > 0 then
+            table.insert(result.unstaged, {
+              path = line,
+              status = "??",
+              old_path = nil,
+            })
+          end
+        end
+        attach_untracked_stats(result.unstaged, git_root)
+
+        callback(nil, result)
+      end)
     end)
   end)
 end
@@ -475,9 +569,7 @@ function M.get_diff_revisions(rev1, rev2, git_root, callback)
       staged = {},
     }
 
-    -- For revision comparison, we treat everything as "unstaged" for explorer compatibility
-    -- But to keep explorer compatible, we'll put them in 'staged' as they are committed changes
-    -- relative to each other.
+    -- For revision comparison, everything is rendered in the explorer's single changes group.
 
     for line in output:gmatch("[^\r\n]+") do
       if #line > 0 then
@@ -502,7 +594,10 @@ function M.get_diff_revisions(rev1, rev2, git_root, callback)
       end
     end
 
-    callback(nil, result)
+    fetch_numstat({ "diff", "--numstat", "-M", rev1, rev2 }, git_root, function(stats)
+      attach_stats(result.unstaged, stats)
+      callback(nil, result)
+    end)
   end)
 end
 

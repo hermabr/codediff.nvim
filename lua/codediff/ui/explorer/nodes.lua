@@ -32,6 +32,21 @@ local STATUS_SYMBOLS = {
   ["!"] = { symbol = "!", color = "CodeDiffStatusConflict" },
 }
 
+local function format_line_stats(data)
+  local additions = tonumber(data.additions)
+  local deletions = tonumber(data.deletions)
+  if not additions and not deletions then
+    return nil
+  end
+
+  return {
+    additions = additions or 0,
+    deletions = deletions or 0,
+    additions_text = "+" .. tostring(additions or 0),
+    deletions_text = "-" .. tostring(deletions or 0),
+  }
+end
+
 -- Indent marker characters (neo-tree style)
 local INDENT_MARKERS = {
   edge = "│", -- Vertical line for non-last items
@@ -100,6 +115,8 @@ function M.create_file_nodes(files, git_root, group)
         path = file.path,
         status = file.status,
         old_path = file.old_path, -- For renames: original path before rename
+        additions = file.additions,
+        deletions = file.deletions,
         icon = icon,
         icon_color = icon_color,
         status_symbol = status_info.symbol,
@@ -223,6 +240,8 @@ function M.create_tree_file_nodes(files, git_root, group)
             path = file.path,
             status = file.status,
             old_path = file.old_path,
+            additions = file.additions,
+            deletions = file.deletions,
             icon = icon,
             icon_color = icon_color,
             status_symbol = status_info.symbol,
@@ -342,8 +361,9 @@ function M.prepare_node(node, max_width, selected_path, selected_group)
       line:append(icon_part, get_hl(data.icon_color))
     end
 
-    -- Status symbol at the end (e.g., "M", "D", "??")
+    -- Status symbol at the start (e.g., "M", "D", "??")
     local status_symbol = data.status_symbol or ""
+    local line_stats = format_line_stats(data)
 
     -- Split path into filename and directory
     local full_path = data.path or node.text
@@ -351,15 +371,25 @@ function M.prepare_node(node, max_width, selected_path, selected_group)
     -- In tree mode, don't show directory (it's in the hierarchy)
     local directory = (view_mode == "tree") and "" or full_path:sub(1, -(#filename + 1))
 
-    -- Calculate how much width we've used and reserve for status
+    -- Calculate how much width we've used before content
     local used_width = vim.fn.strdisplaywidth(indent) + vim.fn.strdisplaywidth(icon_part)
-    local status_reserve = vim.fn.strdisplaywidth(status_symbol) + 3 -- 2 spaces before + 1 space after status
-    local available_for_content = max_width - used_width - status_reserve
+    local status_prefix = status_symbol .. " "
+    used_width = used_width + vim.fn.strdisplaywidth(status_prefix)
 
     -- Show: filename + full directory path, truncate directory from left if needed
     local filename_len = vim.fn.strdisplaywidth(filename)
     local directory_len = vim.fn.strdisplaywidth(directory)
     local space_len = (directory_len > 0) and 1 or 0
+    local stats_width = 0
+    local show_additions = line_stats and line_stats.additions > 0
+    local show_deletions = line_stats and line_stats.deletions > 0
+    if show_additions then
+      stats_width = stats_width + 1 + vim.fn.strdisplaywidth(line_stats.additions_text)
+    end
+    if show_deletions then
+      stats_width = stats_width + 1 + vim.fn.strdisplaywidth(line_stats.deletions_text)
+    end
+    local available_for_content = max_width - used_width - stats_width
 
     if filename_len + space_len + directory_len > available_for_content then
       -- Truncate directory from the right (keep the start)
@@ -387,21 +417,29 @@ function M.prepare_node(node, max_width, selected_path, selected_group)
       end
     end
 
-    -- Append filename (normal weight) and directory (dimmed)
+    -- Append status, filename (normal weight), directory (dimmed), and nonzero stats from the left.
+    line:append(status_symbol, get_hl(data.status_color))
+    line:append(" ", get_hl("Normal"))
     line:append(filename, get_hl("Normal"))
     if #directory > 0 then
       line:append(" ", get_hl("Normal"))
       line:append(directory, get_hl("ExplorerDirectorySmall"))
     end
+    if show_additions then
+      line:append(" ", get_hl("Normal"))
+      line:append(line_stats.additions_text, get_hl("CodeDiffStatusAdded"))
+    end
+    if show_deletions then
+      line:append(" ", get_hl("Normal"))
+      line:append(line_stats.deletions_text, get_hl("CodeDiffStatusDeleted"))
+    end
 
-    -- Add padding to push status symbol to the right edge
-    local content_len = vim.fn.strdisplaywidth(filename) + space_len + vim.fn.strdisplaywidth(directory)
-    local padding_needed = available_for_content - content_len + 2
+    -- Add trailing padding to fill the row background when selected.
+    local content_len = vim.fn.strdisplaywidth(filename) + space_len + vim.fn.strdisplaywidth(directory) + stats_width
+    local padding_needed = available_for_content - content_len
     if padding_needed > 0 then
       line:append(string.rep(" ", padding_needed), get_hl("Normal"))
     end
-    line:append(status_symbol, get_hl(data.status_color))
-    line:append(" ", get_hl("Normal")) -- Right padding (matches status_reserve calculation)
   end
 
   return line
