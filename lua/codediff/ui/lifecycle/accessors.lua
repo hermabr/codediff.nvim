@@ -487,7 +487,7 @@ function M.clear_tab_keymaps(tabpage)
       return
     end
     for _, key in pairs(keys) do
-      if key then
+      if type(key) == "string" and key ~= "" then
         pcall(vim.keymap.del, "n", key, { buffer = bufnr })
       end
     end

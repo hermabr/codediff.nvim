@@ -208,6 +208,7 @@ Setup entry point:
       jump_to_first_change = true,
       highlight_priority = 100,
       compute_moves = false,
+      quit_neovim_on_close = nil,
     },
     explorer = {
       position = "left",
@@ -232,6 +233,7 @@ Setup entry point:
     keymaps = {
       view = {
         quit = "q",
+        close_without_quit = nil,
         toggle_explorer = "<leader>b",
         focus_explorer = "<leader>e",
         next_hunk = "]c",
@@ -294,6 +296,9 @@ Setup entry point:
     },
   })
 <
+
+When `quit_neovim_on_close` is nil, CodeDiff follows
+`CODEDIFF_QUIT_NVIM_ON_CLOSE=1`.
 
 ==============================================================================
 HIGHLIGHT GROUPS                                     *codediff-highlight-groups*

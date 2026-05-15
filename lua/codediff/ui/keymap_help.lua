@@ -43,6 +43,7 @@ local function build_sections(keymaps, is_explorer, is_history, is_review, is_co
   -- View section
   local view_items = {
     { km.quit, "Close codediff tab" },
+    { km.close_without_quit, "Close without quitting Neovim" },
     { km.next_hunk, "Next hunk" },
     { km.prev_hunk, "Previous hunk" },
     { km.diff_get, "Get change from other buffer" },

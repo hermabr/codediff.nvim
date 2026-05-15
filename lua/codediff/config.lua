@@ -46,6 +46,7 @@ M.defaults = {
     compute_moves = false, -- Detect moved code blocks (opt-in, may increase diff computation time)
     compact = false, -- Open diffs in compact mode by default
     compact_context_lines = 3, -- Number of context lines around hunks in compact mode
+    quit_neovim_on_close = nil, -- nil follows CODEDIFF_QUIT_NVIM_ON_CLOSE; true/false override
   },
 
   -- Explorer panel configuration
@@ -85,6 +86,7 @@ M.defaults = {
   keymaps = {
     view = {
       quit = "q", -- Close diff tab
+      close_without_quit = nil, -- Close diff tab without quitting Neovim, useful with diff.quit_neovim_on_close
       toggle_explorer = "<leader>b", -- Toggle explorer visibility (explorer/review mode)
       focus_explorer = "<leader>e", -- Focus explorer panel (explorer/review mode)
       next_hunk = "]c",
