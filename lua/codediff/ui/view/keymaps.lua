@@ -21,18 +21,11 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
 
   -- Helper: Quit diff view
   local function quit_diff()
-    -- Check for unsaved conflict files before closing
-    if not lifecycle.confirm_close_with_unsaved(tabpage) then
-      return -- User cancelled
-    end
-    if #vim.api.nvim_list_tabpages() == 1 then
-      -- Last tab: clean up diff session first so session-persistence plugins
-      -- don't save scratch/virtual buffers, then quit neovim entirely.
-      lifecycle.cleanup_for_quit(tabpage)
-      vim.cmd("qall")
-    else
-      vim.cmd("tabclose")
-    end
+    lifecycle.close(tabpage)
+  end
+
+  local function close_without_quit()
+    lifecycle.close_without_quit(tabpage)
   end
 
   -- Helper: Toggle explorer visibility
@@ -557,6 +550,9 @@ function M.setup_all_keymaps(tabpage, original_bufnr, modified_bufnr, is_explore
   -- Quit keymap (q)
   if keymaps.quit then
     lifecycle.set_tab_keymap(tabpage, "n", keymaps.quit, quit_diff, { desc = "Close codediff tab" })
+  end
+  if keymaps.close_without_quit then
+    lifecycle.set_tab_keymap(tabpage, "n", keymaps.close_without_quit, close_without_quit, { desc = "Close codediff tab without quitting Neovim" })
   end
 
   -- Hunk navigation (]c, [c)

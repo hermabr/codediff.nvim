@@ -2,6 +2,7 @@
 local M = {}
 
 local accessors = require("codediff.ui.lifecycle.accessors")
+local config = require("codediff.config")
 local session = require("codediff.ui.lifecycle.session")
 local state = require("codediff.ui.lifecycle.state")
 local welcome_window = require("codediff.ui.view.welcome_window")
@@ -14,6 +15,49 @@ local function is_virtual_revision(revision)
   return revision ~= nil and revision ~= "WORKING"
 end
 
+local auto_quit_scheduled = false
+local auto_quit_suppressed_tabpage = nil
+
+local function quit_neovim_on_close()
+  local value = config.options.diff.quit_neovim_on_close
+  if value == nil then
+    return vim.env.CODEDIFF_QUIT_NVIM_ON_CLOSE == "1"
+  end
+  return value == true
+end
+
+local function schedule_quit_neovim()
+  if auto_quit_scheduled then
+    return
+  end
+  auto_quit_scheduled = true
+  vim.schedule(function()
+    if quit_neovim_on_close() then
+      pcall(vim.cmd, "confirm qall")
+    end
+    auto_quit_scheduled = false
+  end)
+end
+
+local function consume_auto_quit_suppression(tabpage)
+  local suppressed = auto_quit_suppressed_tabpage == tabpage
+  if suppressed then
+    auto_quit_suppressed_tabpage = nil
+  end
+  return suppressed
+end
+
+local function with_auto_quit_suppressed(tabpage, callback)
+  auto_quit_suppressed_tabpage = tabpage
+  local ok, err = pcall(callback)
+  if not ok then
+    if auto_quit_suppressed_tabpage == tabpage then
+      auto_quit_suppressed_tabpage = nil
+    end
+    error(err, 0)
+  end
+end
+
 -- Cleanup a specific diff session
 -- @param tabpage number: Tab page ID
 local function cleanup_diff(tabpage)
@@ -22,6 +66,7 @@ local function cleanup_diff(tabpage)
   if not diff then
     return
   end
+  local suppress_auto_quit = consume_auto_quit_suppression(tabpage)
 
   -- Emit CodeDiffClose User autocmd
   vim.api.nvim_exec_autocmds("User", {
@@ -126,6 +171,10 @@ local function cleanup_diff(tabpage)
 
   -- Remove from tracking
   active_diffs[tabpage] = nil
+
+  if quit_neovim_on_close() and not suppress_auto_quit then
+    schedule_quit_neovim()
+  end
 end
 
 -- Count windows in current tabpage that have diff markers
@@ -265,6 +314,86 @@ function M.cleanup_for_quit(tabpage)
       end
     end
   end
+end
+
+--- Close a codediff session using the default behavior.
+--- Closing the last tab quits Neovim; otherwise the codediff tab is closed.
+function M.close(tabpage)
+  tabpage = tabpage or vim.api.nvim_get_current_tabpage()
+  local active_diffs = session.get_active_diffs()
+  if not active_diffs[tabpage] then
+    return false
+  end
+
+  if not accessors.confirm_close_with_unsaved(tabpage) then
+    return false
+  end
+
+  local ok, err = pcall(function()
+    if #vim.api.nvim_list_tabpages() == 1 then
+      with_auto_quit_suppressed(tabpage, function()
+        M.cleanup_for_quit(tabpage)
+      end)
+      vim.cmd("qall")
+    else
+      if not vim.api.nvim_tabpage_is_valid(tabpage) then
+        error("codediff tab is no longer valid")
+      end
+      vim.api.nvim_set_current_tabpage(tabpage)
+      vim.cmd("tabclose")
+    end
+  end)
+
+  if not ok then
+    vim.notify("codediff: failed to close\n" .. tostring(err), vim.log.levels.ERROR)
+    return false
+  end
+
+  return true
+end
+
+--- Close a codediff session while keeping Neovim alive.
+--- If codediff is the only tab, create a replacement tab before closing it.
+function M.close_without_quit(tabpage)
+  tabpage = tabpage or vim.api.nvim_get_current_tabpage()
+  local active_diffs = session.get_active_diffs()
+  if not active_diffs[tabpage] then
+    return false
+  end
+
+  if not accessors.confirm_close_with_unsaved(tabpage) then
+    return false
+  end
+
+  local created_tabpage
+  local ok, err = pcall(function()
+    with_auto_quit_suppressed(tabpage, function()
+      if #vim.api.nvim_list_tabpages() == 1 then
+        vim.cmd("tabnew")
+        created_tabpage = vim.api.nvim_get_current_tabpage()
+      end
+      if not vim.api.nvim_tabpage_is_valid(tabpage) then
+        error("codediff tab is no longer valid")
+      end
+      vim.api.nvim_set_current_tabpage(tabpage)
+      vim.cmd("tabclose")
+    end)
+  end)
+
+  if not ok then
+    if created_tabpage and vim.api.nvim_tabpage_is_valid(created_tabpage) then
+      local current = vim.api.nvim_get_current_tabpage()
+      pcall(vim.api.nvim_set_current_tabpage, created_tabpage)
+      pcall(vim.cmd, "tabclose")
+      if vim.api.nvim_tabpage_is_valid(current) then
+        pcall(vim.api.nvim_set_current_tabpage, current)
+      end
+    end
+    vim.notify("codediff: failed to close without quitting Neovim\n" .. tostring(err), vim.log.levels.ERROR)
+    return false
+  end
+
+  return true
 end
 
 -- Cleanup all active diffs (useful for plugin unload/reload)

@@ -24,6 +24,8 @@ M.create_session = session.create_session
 M.setup_autocmds = cleanup.setup_autocmds
 M.cleanup = cleanup.cleanup
 M.cleanup_for_quit = cleanup.cleanup_for_quit
+M.close = cleanup.close
+M.close_without_quit = cleanup.close_without_quit
 M.cleanup_all = cleanup.cleanup_all
 M.setup = cleanup.setup
 

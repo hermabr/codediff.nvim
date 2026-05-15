@@ -102,6 +102,7 @@ https://github.com/user-attachments/assets/64c41f01-dffe-4318-bce4-16eec8de356e
       highlight_priority = 100,           -- Priority for line-level diff highlights (increase to override LSP highlights)
       compute_moves = false,              -- Detect moved code blocks (opt-in, matches VSCode experimental.showMoves)
       compact_context_lines = 3,          -- Number of context lines around hunks in compact mode
+      quit_neovim_on_close = nil,        -- nil follows CODEDIFF_QUIT_NVIM_ON_CLOSE; true/false override
     },
 
     -- Explorer panel configuration
@@ -141,6 +142,7 @@ https://github.com/user-attachments/assets/64c41f01-dffe-4318-bce4-16eec8de356e
     keymaps = {
       view = {
         quit = "q",                    -- Close diff tab
+        close_without_quit = nil,      -- Close diff tab without quitting Neovim
         toggle_explorer = "<leader>b",  -- Toggle explorer visibility (explorer/review mode)
         focus_explorer = "<leader>e",   -- Focus explorer panel (explorer/review mode)
         next_hunk = "]c",   -- Jump to next change
